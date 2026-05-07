@@ -2,7 +2,10 @@
 
 macOS 菜单栏壁纸生成器。把心情、日期、黄历、风格和补充提示词拼成 prompt，生成今日壁纸并自动应用到所有显示器。
 
-![ZenWallpaper](Resources/Branding/zenwallpaper-logo-dark.png)
+## 海报宣传图
+
+![16:9 横版海报](docs/marketing/zenwallpaper-poster-16x9.png)
+![竖版海报](docs/marketing/zenwallpaper-poster-mobile.png)
 
 ## 预览
 
