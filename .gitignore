@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+ZenWallpaper.app/
+dist/
+tmp/
+*.dmg
+DerivedData/
+*.xcuserstate
+*.swp
+*.swo
