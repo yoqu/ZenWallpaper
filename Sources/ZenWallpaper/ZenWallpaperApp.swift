@@ -3,9 +3,27 @@ import AppKit
 
 @main
 struct ZenWallpaperApp: App {
-    @StateObject private var settings = AppSettings()
-    @StateObject private var manager = WallpaperManager()
-    @StateObject private var generator = GenerationCoordinator()
+    @StateObject private var settings: AppSettings
+    @StateObject private var manager: WallpaperManager
+    @StateObject private var generator: GenerationCoordinator
+    @StateObject private var autoScheduler: AutoWallpaperScheduler
+
+    @MainActor
+    init() {
+        let settings = AppSettings()
+        let manager = WallpaperManager()
+        let generator = GenerationCoordinator()
+        let autoScheduler = AutoWallpaperScheduler(
+            settings: settings,
+            manager: manager,
+            generator: generator
+        )
+
+        _settings = StateObject(wrappedValue: settings)
+        _manager = StateObject(wrappedValue: manager)
+        _generator = StateObject(wrappedValue: generator)
+        _autoScheduler = StateObject(wrappedValue: autoScheduler)
+    }
 
     var body: some Scene {
         #if DEBUG
@@ -14,6 +32,7 @@ struct ZenWallpaperApp: App {
                 .environmentObject(settings)
                 .environmentObject(manager)
                 .environmentObject(generator)
+                .environmentObject(autoScheduler)
                 .frame(width: 260, height: 600)
         }
         .windowResizability(.contentSize)
@@ -23,6 +42,7 @@ struct ZenWallpaperApp: App {
                 .environmentObject(settings)
                 .environmentObject(manager)
                 .environmentObject(generator)
+                .environmentObject(autoScheduler)
                 .frame(width: 260, height: 600)
         } label: {
             MenuBarIconView(isLoading: generator.isLoading)
@@ -79,6 +99,7 @@ final class GenerationCoordinator: ObservableObject {
 
     private let api = APIClient()
 
+    @discardableResult
     func generate(settings: AppSettings,
                   manager: WallpaperManager,
                   mood: String,
@@ -86,11 +107,11 @@ final class GenerationCoordinator: ObservableObject {
                   moodValence: Double,
                   style: String,
                   accent: String,
-                  userPrompt: String) async {
-        guard !isLoading else { return }
+                  userPrompt: String) async -> Bool {
+        guard !isLoading else { return false }
         guard !settings.apiKey.isEmpty else {
             lastError = "请先在设置中填入 API Key"
-            return
+            return false
         }
         isLoading = true
         lastError = nil
@@ -135,7 +156,7 @@ final class GenerationCoordinator: ObservableObject {
             )
         } catch {
             lastError = error.localizedDescription
-            return
+            return false
         }
 
         await update("下载图像…", 0.80)
@@ -146,7 +167,7 @@ final class GenerationCoordinator: ObservableObject {
                                        mood: mood,
                                        cacheLimit: settings.cacheLimit) else {
             lastError = "保存图像失败"
-            return
+            return false
         }
 
         await update("应用到显示器…", 0.95)
@@ -154,6 +175,7 @@ final class GenerationCoordinator: ObservableObject {
 
         await update("完成", 1.0)
         try? await Task.sleep(nanoseconds: 200_000_000)
+        return true
     }
 
     @MainActor

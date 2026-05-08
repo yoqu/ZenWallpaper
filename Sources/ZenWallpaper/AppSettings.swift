@@ -13,6 +13,11 @@ final class AppSettings: ObservableObject {
     @AppStorage("cacheLimit") var cacheLimit: Int = 12
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("historyLayoutRaw") var historyLayoutRaw: String = HistoryLayout.rail.rawValue
+    @AppStorage("moodEnergy") var moodEnergy: Double = 0.4
+    @AppStorage("moodValence") var moodValence: Double = 0.65
+    @AppStorage("selectedStyle") var selectedStyle: String = DEFAULT_STYLE
+    @AppStorage("selectedAccent") var selectedAccent: String = "auto"
+    @AppStorage("userPrompt") var userPrompt: String = ""
 
     var autoFreq: AutoFreq {
         get { AutoFreq(rawValue: autoFreqRaw) ?? .daily }

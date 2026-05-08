@@ -1,9 +1,13 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var autoScheduler: AutoWallpaperScheduler
     let close: () -> Void
+
+    @State private var showWeChatQR = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,6 +78,12 @@ struct SettingsView: View {
                         }
                     }
                     .controlSize(.small)
+                    LabeledContent("自动状态") {
+                        Text(autoScheduler.statusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
                 }
 
                 Section("系统") {
@@ -94,7 +104,35 @@ struct SettingsView: View {
                     }
                 }
 
-                Section {
+                Section("关于") {
+                    LabeledContent("反馈") {
+                        Link("GitHub Issues",
+                             destination: URL(string: "https://github.com/yoqu/ZenWallpaper/issues")!)
+                            .controlSize(.small)
+                    }
+                    LabeledContent("X / Twitter") {
+                        Link("@LYoqu60097",
+                             destination: URL(string: "https://x.com/LYoqu60097")!)
+                            .controlSize(.small)
+                    }
+                    LabeledContent("微信") {
+                        HStack(spacing: 6) {
+                            Text("yoqu2020")
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                            Button {
+                                showWeChatQR.toggle()
+                            } label: {
+                                Image(systemName: "qrcode")
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            .help("显示微信二维码")
+                            .popover(isPresented: $showWeChatQR, arrowEdge: .trailing) {
+                                WeChatQRPopover()
+                            }
+                        }
+                    }
                     Text("API Key 仅保存在本机 UserDefaults。生成的图像缓存目录：~/Library/Application Support/ZenWallpaper/cache/")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -103,5 +141,42 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         }
+    }
+}
+
+private struct WeChatQRPopover: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            if let url = Bundle.main.url(forResource: "wechat-qr",
+                                         withExtension: "png",
+                                         subdirectory: "Branding"),
+               let img = NSImage(contentsOf: url) {
+                Image(nsImage: img)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 220, height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary)
+                    .frame(width: 220, height: 220)
+                    .overlay {
+                        VStack(spacing: 4) {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 22))
+                                .foregroundStyle(.secondary)
+                            Text("二维码资源缺失")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+            }
+            Text("微信号：yoqu2020")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(12)
     }
 }

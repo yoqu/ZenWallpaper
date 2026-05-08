@@ -12,21 +12,30 @@ struct PopoverRoot: View {
 
     @State private var view: PopoverView = .main
 
-    @State private var moodEnergy: Double = 0.4
-    @State private var moodValence: Double = 0.65
-    @State private var style: String = DEFAULT_STYLE
-    @State private var accent: String = "auto"
-    @State private var userPrompt: String = ""
-
     var body: some View {
         Group {
             if view == .main {
                 MainPopoverView(
-                    moodEnergy: $moodEnergy,
-                    moodValence: $moodValence,
-                    style: $style,
-                    accent: $accent,
-                    userPrompt: $userPrompt,
+                    moodEnergy: Binding(
+                        get: { settings.moodEnergy },
+                        set: { settings.moodEnergy = $0 }
+                    ),
+                    moodValence: Binding(
+                        get: { settings.moodValence },
+                        set: { settings.moodValence = $0 }
+                    ),
+                    style: Binding(
+                        get: { settings.selectedStyle },
+                        set: { settings.selectedStyle = $0 }
+                    ),
+                    accent: Binding(
+                        get: { settings.selectedAccent },
+                        set: { settings.selectedAccent = $0 }
+                    ),
+                    userPrompt: Binding(
+                        get: { settings.userPrompt },
+                        set: { settings.userPrompt = $0 }
+                    ),
                     openSettings: { view = .settings }
                 )
             } else {
