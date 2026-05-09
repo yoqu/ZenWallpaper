@@ -21,31 +21,41 @@ struct MoodOption: Identifiable, Hashable {
 struct AccentOption: Identifiable, Hashable {
     let id = UUID()
     let key: String
-    let name: String
     let color: Color
+
+    @MainActor
+    var name: String {
+        LocalizationManager.shared.t("accent.\(key)")
+    }
 }
 
 struct StylePreset: Identifiable, Hashable {
     let id: String
-    let label: String
     let assetName: String
+
+    @MainActor
+    var label: String {
+        LocalizationManager.shared.t("style.\(id)")
+    }
 }
 
 enum AutoFreq: String, CaseIterable, Codable {
     case off, daily, hour4, hour1
+
+    @MainActor
     var label: String {
         switch self {
-        case .off: return "关闭"
-        case .daily: return "每日清晨"
-        case .hour4: return "每 4 小时"
-        case .hour1: return "每小时"
+        case .off: return LocalizationManager.shared.t("auto.freq.off")
+        case .daily: return LocalizationManager.shared.t("auto.freq.daily")
+        case .hour4: return LocalizationManager.shared.t("auto.freq.hour4")
+        case .hour1: return LocalizationManager.shared.t("auto.freq.hour1")
         }
     }
 }
 
 enum HistoryLayout: String, CaseIterable, Codable {
     case rail, grid
-    var label: String { self == .rail ? "横向" : "网格" }
+    var label: String { self == .rail ? "rail" : "grid" }
 }
 
 let MOODS: [MoodOption] = [
@@ -58,12 +68,12 @@ let MOODS: [MoodOption] = [
 ]
 
 let STYLE_PRESETS: [StylePreset] = [
-    StylePreset(id: "极简", label: "极简", assetName: "style-minimal"),
-    StylePreset(id: "水彩", label: "水彩", assetName: "style-watercolor"),
-    StylePreset(id: "摄影", label: "摄影", assetName: "style-photo"),
-    StylePreset(id: "赛博朋克", label: "赛博朋克", assetName: "style-cyberpunk"),
-    StylePreset(id: "胶片", label: "胶片", assetName: "style-film"),
-    StylePreset(id: "油画", label: "油画", assetName: "style-oil"),
+    StylePreset(id: "极简", assetName: "style-minimal"),
+    StylePreset(id: "水彩", assetName: "style-watercolor"),
+    StylePreset(id: "摄影", assetName: "style-photo"),
+    StylePreset(id: "赛博朋克", assetName: "style-cyberpunk"),
+    StylePreset(id: "胶片", assetName: "style-film"),
+    StylePreset(id: "油画", assetName: "style-oil"),
 ]
 
 let DEFAULT_STYLE = STYLE_PRESETS.first?.id ?? "极简"
@@ -73,15 +83,16 @@ func stylePreset(for style: String) -> StylePreset {
 }
 
 let ACCENTS: [AccentOption] = [
-    AccentOption(key: "auto",  name: "随心情", color: Color(red: 0.85, green: 0.48, blue: 0.29)),
-    AccentOption(key: "ink",   name: "墨",     color: Color(red: 0.11, green: 0.11, blue: 0.12)),
-    AccentOption(key: "sand",  name: "沙",     color: Color(red: 0.85, green: 0.72, blue: 0.54)),
-    AccentOption(key: "sea",   name: "海",     color: Color(red: 0.23, green: 0.48, blue: 0.67)),
-    AccentOption(key: "moss",  name: "苔",     color: Color(red: 0.35, green: 0.48, blue: 0.29)),
-    AccentOption(key: "ember", name: "炭火",   color: Color(red: 0.78, green: 0.32, blue: 0.16)),
+    AccentOption(key: "auto",  color: Color(red: 0.85, green: 0.48, blue: 0.29)),
+    AccentOption(key: "ink",   color: Color(red: 0.11, green: 0.11, blue: 0.12)),
+    AccentOption(key: "sand",  color: Color(red: 0.85, green: 0.72, blue: 0.54)),
+    AccentOption(key: "sea",   color: Color(red: 0.23, green: 0.48, blue: 0.67)),
+    AccentOption(key: "moss",  color: Color(red: 0.35, green: 0.48, blue: 0.29)),
+    AccentOption(key: "ember", color: Color(red: 0.78, green: 0.32, blue: 0.16)),
 ]
 
-func describeMood(energy: Double, valence: Double) -> String {
+/// Returns the canonical mood key (Chinese — used for prompt composition and storage).
+func moodKey(energy: Double, valence: Double) -> String {
     let e = energy > 0.66 ? "高" : energy > 0.33 ? "中" : "低"
     let v = valence > 0.66 ? "积极" : valence > 0.33 ? "中和" : "低落"
     if e == "高" && v == "积极" { return "兴奋" }
@@ -92,4 +103,20 @@ func describeMood(energy: Double, valence: Double) -> String {
     if e == "低" && v == "中和" { return "松弛" }
     if e == "低" && v == "低落" { return "疲惫" }
     return "中性"
+}
+
+func describeMood(energy: Double, valence: Double) -> String {
+    moodKey(energy: energy, valence: valence)
+}
+
+@MainActor
+func localizedMoodLabel(energy: Double, valence: Double) -> String {
+    LocalizationManager.shared.t("mood.\(moodKey(energy: energy, valence: valence))")
+}
+
+@MainActor
+func localizedMoodLabel(forKey key: String) -> String {
+    let translated = LocalizationManager.shared.t("mood.\(key)")
+    // If the key isn't in the table, fall back to the raw stored value
+    return translated == "mood.\(key)" ? key : translated
 }

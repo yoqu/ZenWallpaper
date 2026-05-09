@@ -7,10 +7,14 @@ struct ZenWallpaperApp: App {
     @StateObject private var manager: WallpaperManager
     @StateObject private var generator: GenerationCoordinator
     @StateObject private var autoScheduler: AutoWallpaperScheduler
+    @StateObject private var l10n: LocalizationManager
 
     @MainActor
     init() {
         let settings = AppSettings()
+        let l10n = LocalizationManager.shared
+        l10n.language = settings.appLanguage
+
         let manager = WallpaperManager()
         let generator = GenerationCoordinator()
         let autoScheduler = AutoWallpaperScheduler(
@@ -23,6 +27,7 @@ struct ZenWallpaperApp: App {
         _manager = StateObject(wrappedValue: manager)
         _generator = StateObject(wrappedValue: generator)
         _autoScheduler = StateObject(wrappedValue: autoScheduler)
+        _l10n = StateObject(wrappedValue: l10n)
     }
 
     var body: some Scene {
@@ -33,7 +38,11 @@ struct ZenWallpaperApp: App {
                 .environmentObject(manager)
                 .environmentObject(generator)
                 .environmentObject(autoScheduler)
+                .environmentObject(l10n)
                 .frame(width: 260, height: 600)
+                .onChange(of: settings.appLanguageRaw) { _, newValue in
+                    l10n.language = AppLanguage(rawValue: newValue) ?? .system
+                }
         }
         .windowResizability(.contentSize)
         #endif
@@ -43,7 +52,11 @@ struct ZenWallpaperApp: App {
                 .environmentObject(manager)
                 .environmentObject(generator)
                 .environmentObject(autoScheduler)
+                .environmentObject(l10n)
                 .frame(width: 260, height: 600)
+                .onChange(of: settings.appLanguageRaw) { _, newValue in
+                    l10n.language = AppLanguage(rawValue: newValue) ?? .system
+                }
         } label: {
             MenuBarIconView(isLoading: generator.isLoading)
         }
@@ -108,9 +121,10 @@ final class GenerationCoordinator: ObservableObject {
                   style: String,
                   accent: String,
                   userPrompt: String) async -> Bool {
+        let l10n = LocalizationManager.shared
         guard !isLoading else { return false }
         guard !settings.apiKey.isEmpty else {
-            lastError = "请先在设置中填入 API Key"
+            lastError = l10n.t("error.needApiKey")
             return false
         }
         isLoading = true
@@ -121,7 +135,7 @@ final class GenerationCoordinator: ObservableObject {
             loadingLabel = ""
         }
 
-        await update("采集 心情·日期·黄历…", 0.15)
+        await update(l10n.t("gen.collecting"), 0.15)
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         let prompt = PromptComposer.compose(
@@ -134,10 +148,10 @@ final class GenerationCoordinator: ObservableObject {
             useDate: settings.useDate,
             useLunar: settings.useLunar
         )
-        await update("组装 prompt…", 0.30)
+        await update(l10n.t("gen.composing"), 0.30)
 
         let size = WallpaperManager.bestSizeForMainScreen()
-        await update("调用 \(settings.model) · \(size)…", 0.55)
+        await update(l10n.t("gen.calling", settings.model, size), 0.55)
         let result: ImageGenerationResult
         do {
             result = try await api.generate(
@@ -146,6 +160,7 @@ final class GenerationCoordinator: ObservableObject {
                 model: settings.model,
                 prompt: prompt,
                 size: size,
+                debugLogging: settings.debugLogging,
                 progress: { [weak self] label, frac in
                     guard let self else { return }
                     Task { @MainActor in
@@ -159,21 +174,22 @@ final class GenerationCoordinator: ObservableObject {
             return false
         }
 
-        await update("下载图像…", 0.80)
+        await update(l10n.t("gen.downloading"), 0.80)
+        let defaultPrompt = "\(mood) · \(style)"
         guard let wp = manager.addNew(imageData: result.data,
                                        mimeType: result.mimeType,
-                                       prompt: userPrompt.isEmpty ? "\(mood) · \(style) · 今日生成" : userPrompt,
+                                       prompt: userPrompt.isEmpty ? defaultPrompt : userPrompt,
                                        style: style,
                                        mood: mood,
                                        cacheLimit: settings.cacheLimit) else {
-            lastError = "保存图像失败"
+            lastError = l10n.t("error.saveImageFailed")
             return false
         }
 
-        await update("应用到显示器…", 0.95)
+        await update(l10n.t("gen.applying"), 0.95)
         manager.applyToAllScreens(url: wp.fileURL)
 
-        await update("完成", 1.0)
+        await update(l10n.t("gen.done"), 1.0)
         try? await Task.sleep(nanoseconds: 200_000_000)
         return true
     }

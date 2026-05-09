@@ -53,6 +53,7 @@ struct MainPopoverView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var generator: GenerationCoordinator
+    @EnvironmentObject var l10n: LocalizationManager
 
     @Binding var moodEnergy: Double
     @Binding var moodValence: Double
@@ -66,7 +67,7 @@ struct MainPopoverView: View {
         VStack(spacing: 0) {
             // Title bar
             HStack(spacing: 6) {
-                Text("禅 · Zen")
+                Text(l10n.t("popover.title"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -75,7 +76,7 @@ struct MainPopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
-                .help("设置")
+                .help(l10n.t("popover.settings"))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -90,7 +91,7 @@ struct MainPopoverView: View {
                     Divider()
 
                     HStack {
-                        Text("最近")
+                        Text(l10n.t("popover.recent"))
                             .font(.callout.weight(.medium))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -101,10 +102,10 @@ struct MainPopoverView: View {
                         }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
-                        .help("打开本地相册目录")
+                        .help(l10n.t("popover.openAlbumTip"))
                     }
                     if manager.wallpapers.isEmpty {
-                        Text("还没有历史，点击下方生成第一张")
+                        Text(l10n.t("popover.emptyHistory"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity)
@@ -115,12 +116,12 @@ struct MainPopoverView: View {
 
                     Divider()
 
-                    Text("心情")
+                    Text(l10n.t("popover.mood"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.secondary)
                     MoodPadView(energy: $moodEnergy, valence: $moodValence)
 
-                    Text("风格 · 主色 · 补充")
+                    Text(l10n.t("popover.styleSection"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.secondary)
                     StylePickerView(style: $style, accent: $accent, userPrompt: $userPrompt)
@@ -138,10 +139,10 @@ struct MainPopoverView: View {
                         HStack(spacing: 6) {
                             if generator.isLoading {
                                 ProgressView().controlSize(.small)
-                                Text("正在生成…")
+                                Text(l10n.t("popover.generating"))
                             } else {
                                 Image(systemName: "sparkles")
-                                Text("生成今日壁纸")
+                                Text(l10n.t("popover.generateButton"))
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -157,11 +158,11 @@ struct MainPopoverView: View {
 
             // Footer
             HStack {
-                Text("禅 · v1.0")
+                Text(l10n.t("popover.footerVersion"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Button("退出") { NSApplication.shared.terminate(nil) }
+                Button(l10n.t("common.quit")) { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .foregroundStyle(.secondary)
@@ -192,6 +193,7 @@ struct MainPopoverView: View {
 struct TodayHeroView: View {
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var generator: GenerationCoordinator
+    @EnvironmentObject var l10n: LocalizationManager
 
     var body: some View {
         ZStack {
@@ -209,7 +211,7 @@ struct TodayHeroView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
-                            Text("\(w.style) · \(w.mood)")
+                            Text("\(l10n.t("style.\(w.style)")) · \(localizedMoodLabel(forKey: w.mood))")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.85))
                         }
@@ -220,7 +222,7 @@ struct TodayHeroView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .contextMenu {
-                        Button("在 Finder 中显示") { manager.revealInFinder(w) }
+                        Button(l10n.t("common.openInFinder")) { manager.revealInFinder(w) }
                     }
             } else {
                 RoundedRectangle(cornerRadius: 10)
@@ -231,7 +233,7 @@ struct TodayHeroView: View {
                         VStack(spacing: 4) {
                             Image(systemName: "moon.stars")
                                 .font(.system(size: 22))
-                            Text("由心情、日期与黄历，生成今日一张")
+                            Text(l10n.t("popover.heroPlaceholder"))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -263,6 +265,8 @@ struct TodayHeroView: View {
 // MARK: Lunar strip
 
 struct LunarStripView: View {
+    @EnvironmentObject var l10n: LocalizationManager
+
     var body: some View {
         let cal = Calendar(identifier: .chinese)
         let f = DateFormatter()
@@ -272,8 +276,13 @@ struct LunarStripView: View {
         let chinese = f.string(from: Date())
 
         let g = DateFormatter()
-        g.locale = Locale(identifier: "zh_CN")
-        g.dateFormat = "M月d日 EEE"
+        if l10n.effective == .zh {
+            g.locale = Locale(identifier: "zh_CN")
+            g.dateFormat = "M月d日 EEE"
+        } else {
+            g.locale = Locale(identifier: "en_US")
+            g.dateFormat = "MMM d, EEE"
+        }
         let solar = g.string(from: Date())
 
         return HStack(spacing: 4) {
@@ -298,6 +307,7 @@ struct LunarStripView: View {
 
 struct HistoryRailView: View {
     @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var l10n: LocalizationManager
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -333,10 +343,10 @@ struct HistoryRailView: View {
                     .buttonStyle(.plain)
                     .help(w.prompt)
                     .contextMenu {
-                        Button("设为壁纸") { manager.setCurrent(w) }
-                        Button("在 Finder 中显示") { manager.revealInFinder(w) }
+                        Button(l10n.t("popover.contextSetWallpaper")) { manager.setCurrent(w) }
+                        Button(l10n.t("common.openInFinder")) { manager.revealInFinder(w) }
                         Divider()
-                        Button("删除", role: .destructive) { manager.delete(w) }
+                        Button(l10n.t("common.delete"), role: .destructive) { manager.delete(w) }
                     }
                 }
             }
@@ -349,6 +359,7 @@ struct HistoryRailView: View {
 // MARK: Mood pad
 
 struct MoodPadView: View {
+    @EnvironmentObject var l10n: LocalizationManager
     @Binding var energy: Double
     @Binding var valence: Double
 
@@ -368,15 +379,15 @@ struct MoodPadView: View {
 
                     VStack {
                         HStack {
-                            Text("疲惫").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            Text(l10n.t("popover.moodTired")).font(.system(size: 8)).foregroundStyle(.tertiary)
                             Spacer()
-                            Text("兴奋").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            Text(l10n.t("popover.moodExcited")).font(.system(size: 8)).foregroundStyle(.tertiary)
                         }
                         Spacer()
                         HStack {
-                            Text("低落").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            Text(l10n.t("popover.moodDown")).font(.system(size: 8)).foregroundStyle(.tertiary)
                             Spacer()
-                            Text("平静").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            Text(l10n.t("popover.moodCalm")).font(.system(size: 8)).foregroundStyle(.tertiary)
                         }
                     }
                     .padding(4)
@@ -400,10 +411,10 @@ struct MoodPadView: View {
             .frame(height: 80)
 
             HStack {
-                Text(describeMood(energy: energy, valence: valence))
+                Text(localizedMoodLabel(energy: energy, valence: valence))
                     .font(.caption.weight(.medium))
                 Spacer()
-                Text("能量 \(Int(energy*100))  情绪 \(Int(valence*100))")
+                Text(l10n.t("popover.moodReadout", Int(energy*100), Int(valence*100)))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -414,6 +425,7 @@ struct MoodPadView: View {
 // MARK: Style picker
 
 struct StylePickerView: View {
+    @EnvironmentObject var l10n: LocalizationManager
     @Binding var style: String
     @Binding var accent: String
     @Binding var userPrompt: String
@@ -435,7 +447,7 @@ struct StylePickerView: View {
                 }
             }
             HStack(spacing: 6) {
-                Text("主色")
+                Text(l10n.t("popover.accentLabel"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(ACCENTS) { a in
@@ -453,7 +465,7 @@ struct StylePickerView: View {
                     .help(a.name)
                 }
             }
-            TextField("补充提示词（可选）：山脊、薄雾、远处灯火…",
+            TextField(l10n.t("popover.userPromptPlaceholder"),
                       text: $userPrompt, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)

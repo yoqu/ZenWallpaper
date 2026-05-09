@@ -3,13 +3,14 @@ import Foundation
 
 @MainActor
 final class AutoWallpaperScheduler: ObservableObject {
-    @Published private(set) var statusText: String = "自动生成待命中"
+    @Published private(set) var statusText: String = LocalizationManager.shared.t("auto.status.idle")
 
     private let settings: AppSettings
     private let manager: WallpaperManager
     private let generator: GenerationCoordinator
     private let defaults = UserDefaults.standard
     private let calendar = Calendar.current
+    private var l10n: LocalizationManager { LocalizationManager.shared }
 
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
@@ -82,7 +83,7 @@ final class AutoWallpaperScheduler: ObservableObject {
 
         let now = Date()
         guard !settings.apiKey.isEmpty else {
-            statusText = "自动生成已暂停：缺少 API Key"
+            statusText = l10n.t("auto.status.noKey")
             return
         }
 
@@ -95,17 +96,17 @@ final class AutoWallpaperScheduler: ObservableObject {
         if let lastAttempt = defaults.object(forKey: lastAutoAttemptKey) as? Date,
            now.timeIntervalSince(lastAttempt) < retryInterval {
             let retryAt = lastAttempt.addingTimeInterval(retryInterval)
-            statusText = "上次自动生成未完成，\(timeString(retryAt)) 后重试"
+            statusText = l10n.t("auto.status.retryAfter", timeString(retryAt))
             return
         }
 
         guard !generator.isLoading else {
-            statusText = "正在生成中，自动任务等待下一轮检查"
+            statusText = l10n.t("auto.status.busy")
             return
         }
 
         defaults.set(now, forKey: lastAutoAttemptKey)
-        statusText = "自动生成中…"
+        statusText = l10n.t("auto.status.generating")
 
         let succeeded = await generator.generate(
             settings: settings,
@@ -129,11 +130,11 @@ final class AutoWallpaperScheduler: ObservableObject {
     private func generationDecision(now: Date) -> GenerationDecision {
         switch settings.autoFreq {
         case .off:
-            return GenerationDecision(false, "自动生成已关闭")
+            return GenerationDecision(false, l10n.t("auto.status.off"))
         case .hour1:
-            return intervalDecision(now: now, seconds: 60 * 60, label: "每小时")
+            return intervalDecision(now: now, seconds: 60 * 60, label: l10n.t("auto.label.hour1"))
         case .hour4:
-            return intervalDecision(now: now, seconds: 4 * 60 * 60, label: "每 4 小时")
+            return intervalDecision(now: now, seconds: 4 * 60 * 60, label: l10n.t("auto.label.hour4"))
         case .daily:
             return dailyDecision(now: now)
         }
@@ -141,29 +142,29 @@ final class AutoWallpaperScheduler: ObservableObject {
 
     private func intervalDecision(now: Date, seconds: TimeInterval, label: String) -> GenerationDecision {
         guard let latest = latestActivityDate() else {
-            return GenerationDecision(true, "\(label)自动生成准备开始")
+            return GenerationDecision(true, l10n.t("auto.status.intervalReady", label))
         }
 
         let next = latest.addingTimeInterval(seconds)
         if now >= next {
-            return GenerationDecision(true, "\(label)自动生成到点")
+            return GenerationDecision(true, l10n.t("auto.status.intervalDue", label))
         }
 
-        return GenerationDecision(false, "\(label)自动生成下次 \(timeString(next))")
+        return GenerationDecision(false, l10n.t("auto.status.intervalNext", label, timeString(next)))
     }
 
     private func dailyDecision(now: Date) -> GenerationDecision {
         let morning = calendar.date(bySettingHour: 7, minute: 0, second: 0, of: now) ?? now
         if now < morning {
-            return GenerationDecision(false, "每日清晨自动生成下次 \(timeString(morning))")
+            return GenerationDecision(false, l10n.t("auto.status.dailyNext", timeString(morning)))
         }
 
         if let latest = latestActivityDate(), latest >= morning {
             let tomorrow = calendar.date(byAdding: .day, value: 1, to: morning) ?? now.addingTimeInterval(24 * 60 * 60)
-            return GenerationDecision(false, "每日清晨自动生成下次 \(timeString(tomorrow))")
+            return GenerationDecision(false, l10n.t("auto.status.dailyNext", timeString(tomorrow)))
         }
 
-        return GenerationDecision(true, "今日自动生成准备开始")
+        return GenerationDecision(true, l10n.t("auto.status.dailyReady"))
     }
 
     private func latestActivityDate() -> Date? {
@@ -180,8 +181,13 @@ final class AutoWallpaperScheduler: ObservableObject {
 
     private func timeString(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = calendar.isDateInToday(date) ? "HH:mm" : "M月d日 HH:mm"
+        if l10n.effective == .zh {
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.dateFormat = calendar.isDateInToday(date) ? "HH:mm" : "M月d日 HH:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US")
+            formatter.dateFormat = calendar.isDateInToday(date) ? "HH:mm" : "MMM d HH:mm"
+        }
         return formatter.string(from: date)
     }
 }

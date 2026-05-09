@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var autoScheduler: AutoWallpaperScheduler
+    @EnvironmentObject var l10n: LocalizationManager
     let close: () -> Void
 
     @State private var showWeChatQR = false
@@ -13,12 +14,12 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             HStack {
                 Button(action: close) {
-                    Label("返回", systemImage: "chevron.left")
+                    Label(l10n.t("common.back"), systemImage: "chevron.left")
                         .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
-                Text("设置")
+                Text(l10n.t("settings.title"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -29,9 +30,9 @@ struct SettingsView: View {
             Divider()
 
             Form {
-                Section("模型") {
+                Section(l10n.t("settings.section.model")) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Base URL")
+                        Text(l10n.t("settings.baseUrl"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         TextField("", text: $settings.baseUrl)
@@ -40,7 +41,7 @@ struct SettingsView: View {
                             .labelsHidden()
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("API Key")
+                        Text(l10n.t("settings.apiKey"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         SecureField("", text: $settings.apiKey)
@@ -48,29 +49,29 @@ struct SettingsView: View {
                             .controlSize(.small)
                             .labelsHidden()
                     }
-                    Picker("模型", selection: $settings.model) {
+                    Picker(l10n.t("settings.modelPicker"), selection: $settings.model) {
                         Text("gpt-image-2").tag("gpt-image-2")
                         Text("gpt-image-1").tag("gpt-image-1")
                         Text("dall-e-3").tag("dall-e-3")
                     }
                     .controlSize(.small)
-                    LabeledContent("生成尺寸") {
+                    LabeledContent(l10n.t("settings.imageSize")) {
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(WallpaperManager.bestSizeForMainScreen())
                                 .font(.caption.monospacedDigit())
-                            Text("适配主屏 \(WallpaperManager.describeMainScreen())")
+                            Text(l10n.t("settings.fitsScreen", WallpaperManager.describeMainScreen()))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
                     }
                 }
 
-                Section("生成") {
-                    Toggle("附加日期", isOn: $settings.useDate)
+                Section(l10n.t("settings.section.generation")) {
+                    Toggle(l10n.t("settings.useDate"), isOn: $settings.useDate)
                         .controlSize(.small)
-                    Toggle("附加黄历", isOn: $settings.useLunar)
+                    Toggle(l10n.t("settings.useLunar"), isOn: $settings.useLunar)
                         .controlSize(.small)
-                    Picker("自动生成", selection: Binding(
+                    Picker(l10n.t("settings.autoGenerate"), selection: Binding(
                         get: { settings.autoFreq },
                         set: { settings.autoFreq = $0 })) {
                         ForEach(AutoFreq.allCases, id: \.self) { f in
@@ -78,7 +79,7 @@ struct SettingsView: View {
                         }
                     }
                     .controlSize(.small)
-                    LabeledContent("自动状态") {
+                    LabeledContent(l10n.t("settings.autoStatus")) {
                         Text(autoScheduler.statusText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -86,26 +87,49 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("系统") {
-                    Picker("历史保留", selection: $settings.cacheLimit) {
-                        Text("6 张").tag(6)
-                        Text("12 张").tag(12)
-                        Text("24 张").tag(24)
-                        Text("50 张").tag(50)
+                Section(l10n.t("settings.section.system")) {
+                    Picker(l10n.t("settings.language"), selection: $settings.appLanguageRaw) {
+                        Text(l10n.t("settings.language.system")).tag(AppLanguage.system.rawValue)
+                        Text("中文").tag(AppLanguage.zh.rawValue)
+                        Text("English").tag(AppLanguage.en.rawValue)
                     }
                     .controlSize(.small)
-                    LabeledContent("缓存目录") {
+                    Picker(l10n.t("settings.historyLimit"), selection: $settings.cacheLimit) {
+                        Text(l10n.t("common.images_count", 6)).tag(6)
+                        Text(l10n.t("common.images_count", 12)).tag(12)
+                        Text(l10n.t("common.images_count", 24)).tag(24)
+                        Text(l10n.t("common.images_count", 50)).tag(50)
+                    }
+                    .controlSize(.small)
+                    LabeledContent(l10n.t("settings.cacheDir")) {
                         Button {
                             manager.openCacheDirectory()
                         } label: {
-                            Label("在 Finder 中打开", systemImage: "folder")
+                            Label(l10n.t("common.openInFinderShort"), systemImage: "folder")
                         }
                         .controlSize(.small)
                     }
                 }
 
-                Section("关于") {
-                    LabeledContent("反馈") {
+                Section(l10n.t("settings.section.debug")) {
+                    Toggle(l10n.t("settings.debugLogging"), isOn: $settings.debugLogging)
+                        .controlSize(.small)
+                    LabeledContent(l10n.t("settings.logsDir")) {
+                        Button {
+                            manager.openLogsDirectory()
+                        } label: {
+                            Label(l10n.t("common.open"), systemImage: "folder")
+                        }
+                        .controlSize(.small)
+                        .help(l10n.t("settings.logsTip"))
+                    }
+                    Text(l10n.t("settings.debugDescription"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Section(l10n.t("settings.section.about")) {
+                    LabeledContent(l10n.t("settings.feedback")) {
                         Link("GitHub Issues",
                              destination: URL(string: "https://github.com/yoqu/ZenWallpaper/issues")!)
                             .controlSize(.small)
@@ -115,7 +139,7 @@ struct SettingsView: View {
                              destination: URL(string: "https://x.com/LYoqu60097")!)
                             .controlSize(.small)
                     }
-                    LabeledContent("微信") {
+                    LabeledContent(l10n.t("settings.wechat")) {
                         HStack(spacing: 6) {
                             Text("yoqu2020")
                                 .font(.caption.monospaced())
@@ -127,13 +151,13 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .controlSize(.small)
-                            .help("显示微信二维码")
+                            .help(l10n.t("settings.wechatTip"))
                             .popover(isPresented: $showWeChatQR, arrowEdge: .trailing) {
                                 WeChatQRPopover()
                             }
                         }
                     }
-                    Text("API Key 仅保存在本机 UserDefaults。生成的图像缓存目录：~/Library/Application Support/ZenWallpaper/cache/")
+                    Text(l10n.t("settings.privacyNote"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -145,6 +169,8 @@ struct SettingsView: View {
 }
 
 private struct WeChatQRPopover: View {
+    @EnvironmentObject var l10n: LocalizationManager
+
     var body: some View {
         VStack(spacing: 8) {
             if let url = Bundle.main.url(forResource: "wechat-qr",
@@ -166,13 +192,13 @@ private struct WeChatQRPopover: View {
                             Image(systemName: "qrcode")
                                 .font(.system(size: 22))
                                 .foregroundStyle(.secondary)
-                            Text("二维码资源缺失")
+                            Text(l10n.t("settings.qrMissing"))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
                     }
             }
-            Text("微信号：yoqu2020")
+            Text(l10n.t("settings.wechatLabel"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

@@ -93,6 +93,20 @@ final class WallpaperManager: ObservableObject {
         NSWorkspace.shared.open(cacheDir)
     }
 
+    var logsDir: URL {
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("ZenWallpaper", isDirectory: true)
+            .appendingPathComponent("logs", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    func openLogsDirectory() {
+        NSWorkspace.shared.open(logsDir)
+    }
+
     /// Pick the best generation size for the main screen at the highest resolution
     /// gpt-image-2 supports. Probed values (verified in production):
     ///   2048×1152 (16:9 landscape, max)

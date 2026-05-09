@@ -18,6 +18,13 @@ final class AppSettings: ObservableObject {
     @AppStorage("selectedStyle") var selectedStyle: String = DEFAULT_STYLE
     @AppStorage("selectedAccent") var selectedAccent: String = "auto"
     @AppStorage("userPrompt") var userPrompt: String = ""
+    @AppStorage("debugLogging") var debugLogging: Bool = false
+    @AppStorage("appLanguage") var appLanguageRaw: String = AppLanguage.system.rawValue
+
+    var appLanguage: AppLanguage {
+        get { AppLanguage(rawValue: appLanguageRaw) ?? .system }
+        set { appLanguageRaw = newValue.rawValue }
+    }
 
     var autoFreq: AutoFreq {
         get { AutoFreq(rawValue: autoFreqRaw) ?? .daily }
