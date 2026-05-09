@@ -41,6 +41,24 @@
         <key>NSAllowsArbitraryLoads</key>
         <true/>
     </dict>
+    <!-- Custom URL scheme registration. The qushenma frontend redirects the
+         browser to `zenwallpaper://connected?code=BNUH-X9E2` after the user
+         approves a desktop connection, and macOS routes that URL into our
+         `onOpenURL` handler so we can short-circuit the device-flow polling
+         loop and pick up the issued token immediately. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.zen.wallpaper.connect</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>zenwallpaper</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 ZenWallpaper</string>
 </dict>

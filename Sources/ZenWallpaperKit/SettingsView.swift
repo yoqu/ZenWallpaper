@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var autoScheduler: AutoWallpaperScheduler
+    @EnvironmentObject var shenma: ShenmaConnectionManager
     @EnvironmentObject var l10n: LocalizationManager
     let close: () -> Void
 
@@ -30,42 +31,6 @@ struct SettingsView: View {
             Divider()
 
             Form {
-                Section(l10n.t("settings.section.model")) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(l10n.t("settings.baseUrl"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("", text: $settings.baseUrl)
-                            .textFieldStyle(.roundedBorder)
-                            .controlSize(.small)
-                            .labelsHidden()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(l10n.t("settings.apiKey"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        SecureField("", text: $settings.apiKey)
-                            .textFieldStyle(.roundedBorder)
-                            .controlSize(.small)
-                            .labelsHidden()
-                    }
-                    Picker(l10n.t("settings.modelPicker"), selection: $settings.model) {
-                        Text("gpt-image-2").tag("gpt-image-2")
-                        Text("gpt-image-1").tag("gpt-image-1")
-                        Text("dall-e-3").tag("dall-e-3")
-                    }
-                    .controlSize(.small)
-                    LabeledContent(l10n.t("settings.imageSize")) {
-                        VStack(alignment: .trailing, spacing: 1) {
-                            Text(WallpaperManager.bestSizeForMainScreen())
-                                .font(.caption.monospacedDigit())
-                            Text(l10n.t("settings.fitsScreen", WallpaperManager.describeMainScreen()))
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-
                 Section(l10n.t("settings.section.generation")) {
                     Toggle(l10n.t("settings.useDate"), isOn: $settings.useDate)
                         .controlSize(.small)
@@ -84,6 +49,15 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent(l10n.t("settings.imageSize")) {
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(WallpaperManager.bestSizeForMainScreen())
+                                .font(.caption.monospacedDigit())
+                            Text(l10n.t("settings.fitsScreen", WallpaperManager.describeMainScreen()))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
 
@@ -108,6 +82,110 @@ struct SettingsView: View {
                             Label(l10n.t("common.openInFinderShort"), systemImage: "folder")
                         }
                         .controlSize(.small)
+                    }
+                }
+
+                Section(l10n.t("settings.section.shenma")) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(l10n.t("settings.shenmaEndpoint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        // One-tap preset switcher. Picking Production / Local dev fills
+                        // the URL field with the canonical value; Custom hands control
+                        // back to whatever's typed below.
+                        Picker("", selection: Binding(
+                            get: { ShenmaEndpoint.match(settings.shenmaBaseUrl) },
+                            set: { preset in
+                                if preset != .custom {
+                                    settings.shenmaBaseUrl = preset.url
+                                }
+                            }
+                        )) {
+                            Text(l10n.t("settings.shenmaEndpoint.production"))
+                                .tag(ShenmaEndpoint.production)
+                            Text(l10n.t("settings.shenmaEndpoint.localhost"))
+                                .tag(ShenmaEndpoint.localhost)
+                            Text(l10n.t("settings.shenmaEndpoint.custom"))
+                                .tag(ShenmaEndpoint.custom)
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+                        .labelsHidden()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(l10n.t("settings.shenmaBaseUrl"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("", text: $settings.shenmaBaseUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .labelsHidden()
+                            .help(l10n.t("settings.shenmaBaseUrlHelp"))
+                    }
+                    if let account = shenma.account {
+                        LabeledContent(l10n.t("settings.shenmaStatus")) {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(account.user.nickname)
+                                    .font(.caption)
+                                Text("@\(account.user.username)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    } else if shenma.isConnecting {
+                        LabeledContent(l10n.t("settings.shenmaStatus")) {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(l10n.t("settings.shenmaConnecting"))
+                                    .font(.caption)
+                                if let code = shenma.userCode {
+                                    Text(code)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.tertiary)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    } else {
+                        LabeledContent(l10n.t("settings.shenmaStatus")) {
+                            Text(l10n.t("settings.shenmaDisconnected"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let error = shenma.lastError {
+                        Text(error)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    }
+                    // One action button at a time, three mutually exclusive states:
+                    //   • disconnected → prominent "Connect"
+                    //   • connecting  → red "Cancel" (aborts the poll loop locally)
+                    //   • connected   → red "Disconnect" (revokes the token server-side too)
+                    // Showing both buttons grayed-out at the same time was confusing.
+                    HStack {
+                        if shenma.isConnected {
+                            Button(role: .destructive) {
+                                shenma.disconnect(baseUrl: settings.shenmaBaseUrl)
+                            } label: {
+                                Label(l10n.t("settings.shenmaDisconnect"), systemImage: "xmark.circle")
+                            }
+                            .controlSize(.small)
+                        } else if shenma.isConnecting {
+                            Button(role: .destructive) {
+                                shenma.disconnect(baseUrl: settings.shenmaBaseUrl)
+                            } label: {
+                                Label(l10n.t("settings.shenmaCancel"), systemImage: "xmark.circle")
+                            }
+                            .controlSize(.small)
+                        } else {
+                            Button {
+                                Task { await shenma.connect(baseUrl: settings.shenmaBaseUrl) }
+                            } label: {
+                                Label(l10n.t("settings.shenmaConnect"), systemImage: "link")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
                     }
                 }
 

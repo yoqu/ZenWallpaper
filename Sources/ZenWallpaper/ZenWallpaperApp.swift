@@ -1,26 +1,55 @@
 import SwiftUI
 import AppKit
+// All app code lives in ZenWallpaperKit so the test runner can reach it through
+// `@testable import` — see Package.swift for context.
+@testable import ZenWallpaperKit
+
+/// Bridge AppKit's `application(_:open:)` into a SwiftUI-friendly notification.
+/// Why not `.onOpenURL`? In a `MenuBarExtra`-only app the SwiftUI scene tree only
+/// exists while the popover is showing, so `.onOpenURL` silently misses URLs
+/// that arrive while it's closed. The AppDelegate, by contrast, is alive for the
+/// entire process lifetime — it captures the URL no matter what the UI is doing
+/// and re-broadcasts it through `NotificationCenter` so any subscriber (in our
+/// case `ShenmaConnectionManager`) can react.
+final class ZenWallpaperAppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            NotificationCenter.default.post(
+                name: ShenmaConnectionManager.urlReceivedNotificationName,
+                object: nil,
+                userInfo: ["url": url]
+            )
+        }
+    }
+}
 
 @main
 struct ZenWallpaperApp: App {
+    @NSApplicationDelegateAdaptor(ZenWallpaperAppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettings
     @StateObject private var manager: WallpaperManager
     @StateObject private var generator: GenerationCoordinator
     @StateObject private var autoScheduler: AutoWallpaperScheduler
     @StateObject private var l10n: LocalizationManager
+    @StateObject private var shenma: ShenmaConnectionManager
 
     @MainActor
     init() {
         let settings = AppSettings()
+        // Bump anyone still on the old `https://qushenma.com` default to the canonical
+        // `https://www.qushenma.com`. No-op for users who set their own URL.
+        settings.migrateLegacyShenmaBaseUrlIfNeeded()
         let l10n = LocalizationManager.shared
         l10n.language = settings.appLanguage
 
         let manager = WallpaperManager()
         let generator = GenerationCoordinator()
+        let shenma = ShenmaConnectionManager()
         let autoScheduler = AutoWallpaperScheduler(
             settings: settings,
             manager: manager,
-            generator: generator
+            generator: generator,
+            shenma: shenma
         )
 
         _settings = StateObject(wrappedValue: settings)
@@ -28,6 +57,7 @@ struct ZenWallpaperApp: App {
         _generator = StateObject(wrappedValue: generator)
         _autoScheduler = StateObject(wrappedValue: autoScheduler)
         _l10n = StateObject(wrappedValue: l10n)
+        _shenma = StateObject(wrappedValue: shenma)
     }
 
     var body: some Scene {
@@ -39,9 +69,16 @@ struct ZenWallpaperApp: App {
                 .environmentObject(generator)
                 .environmentObject(autoScheduler)
                 .environmentObject(l10n)
+                .environmentObject(shenma)
                 .frame(width: 260, height: 600)
                 .onChange(of: settings.appLanguageRaw) { _, newValue in
                     l10n.language = AppLanguage(rawValue: newValue) ?? .system
+                }
+                .task {
+                    // Validate the cached qushenma token against the server once the popover
+                    // appears. refresh() only clears local state on a real 401 — transient
+                    // errors leave the cached account in place.
+                    await shenma.refresh(baseUrl: settings.shenmaBaseUrl)
                 }
         }
         .windowResizability(.contentSize)
@@ -53,9 +90,16 @@ struct ZenWallpaperApp: App {
                 .environmentObject(generator)
                 .environmentObject(autoScheduler)
                 .environmentObject(l10n)
+                .environmentObject(shenma)
                 .frame(width: 260, height: 600)
                 .onChange(of: settings.appLanguageRaw) { _, newValue in
                     l10n.language = AppLanguage(rawValue: newValue) ?? .system
+                }
+                .task {
+                    // Validate the cached qushenma token against the server once the popover
+                    // appears. refresh() only clears local state on a real 401 — transient
+                    // errors leave the cached account in place.
+                    await shenma.refresh(baseUrl: settings.shenmaBaseUrl)
                 }
         } label: {
             MenuBarIconView(isLoading: generator.isLoading)
@@ -100,103 +144,5 @@ enum MenuBarIconProvider {
         image.isTemplate = true
         image.size = NSSize(width: menuBarPointSize, height: menuBarPointSize)
         return image
-    }
-}
-
-@MainActor
-final class GenerationCoordinator: ObservableObject {
-    @Published var isLoading = false
-    @Published var loadingLabel = ""
-    @Published var loadingProgress: Double = 0
-    @Published var lastError: String?
-
-    private let api = APIClient()
-
-    @discardableResult
-    func generate(settings: AppSettings,
-                  manager: WallpaperManager,
-                  mood: String,
-                  moodEnergy: Double,
-                  moodValence: Double,
-                  style: String,
-                  accent: String,
-                  userPrompt: String) async -> Bool {
-        let l10n = LocalizationManager.shared
-        guard !isLoading else { return false }
-        guard !settings.apiKey.isEmpty else {
-            lastError = l10n.t("error.needApiKey")
-            return false
-        }
-        isLoading = true
-        lastError = nil
-        defer {
-            isLoading = false
-            loadingProgress = 0
-            loadingLabel = ""
-        }
-
-        await update(l10n.t("gen.collecting"), 0.15)
-        try? await Task.sleep(nanoseconds: 200_000_000)
-
-        let prompt = PromptComposer.compose(
-            mood: mood,
-            moodEnergy: moodEnergy,
-            moodValence: moodValence,
-            style: style,
-            accent: accent,
-            userPrompt: userPrompt,
-            useDate: settings.useDate,
-            useLunar: settings.useLunar
-        )
-        await update(l10n.t("gen.composing"), 0.30)
-
-        let size = WallpaperManager.bestSizeForMainScreen()
-        await update(l10n.t("gen.calling", settings.model, size), 0.55)
-        let result: ImageGenerationResult
-        do {
-            result = try await api.generate(
-                baseUrl: settings.baseUrl,
-                apiKey: settings.apiKey,
-                model: settings.model,
-                prompt: prompt,
-                size: size,
-                debugLogging: settings.debugLogging,
-                progress: { [weak self] label, frac in
-                    guard let self else { return }
-                    Task { @MainActor in
-                        self.loadingLabel = label
-                        self.loadingProgress = frac
-                    }
-                }
-            )
-        } catch {
-            lastError = error.localizedDescription
-            return false
-        }
-
-        await update(l10n.t("gen.downloading"), 0.80)
-        let defaultPrompt = "\(mood) · \(style)"
-        guard let wp = manager.addNew(imageData: result.data,
-                                       mimeType: result.mimeType,
-                                       prompt: userPrompt.isEmpty ? defaultPrompt : userPrompt,
-                                       style: style,
-                                       mood: mood,
-                                       cacheLimit: settings.cacheLimit) else {
-            lastError = l10n.t("error.saveImageFailed")
-            return false
-        }
-
-        await update(l10n.t("gen.applying"), 0.95)
-        manager.applyToAllScreens(url: wp.fileURL)
-
-        await update(l10n.t("gen.done"), 1.0)
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        return true
-    }
-
-    @MainActor
-    private func update(_ label: String, _ progress: Double) async {
-        loadingLabel = label
-        loadingProgress = progress
     }
 }

@@ -28,12 +28,6 @@ private enum APILog {
         emit("← \(status) \(url.absoluteString)\nbody:\n\(body)")
     }
 
-    static func poll(enabled: Bool, url: URL, status: Int, data: Data, attempt: Int) {
-        guard enabled else { return }
-        let body = String(data: data, encoding: .utf8) ?? "<binary \(data.count)B>"
-        emit("← poll#\(attempt) \(status) \(url.absoluteString)\nbody:\n\(body)")
-    }
-
     static func info(enabled: Bool, _ msg: String) {
         guard enabled else { return }
         emit(msg)
@@ -75,7 +69,8 @@ enum APIError: Error, LocalizedError {
     case http(Int, String)
     case network(String)
     case taskFailed(String)
-    case taskTimeout
+    case unauthorized
+    case insufficientCredits(String)
 
     var errorDescription: String? {
         switch self {
@@ -85,7 +80,8 @@ enum APIError: Error, LocalizedError {
         case .http(let code, let body): return localizedString("error.http", language: nil, code, body)
         case .network(let s): return localizedString("error.network", language: nil, s)
         case .taskFailed(let s): return localizedString("error.taskFailed", language: nil, s)
-        case .taskTimeout: return localizedString("error.taskTimeout")
+        case .unauthorized: return localizedString("error.needLogin")
+        case .insufficientCredits(let s): return s
         }
     }
 }
@@ -93,199 +89,135 @@ enum APIError: Error, LocalizedError {
 struct ImageGenerationResult {
     let data: Data
     let mimeType: String
+    /// New balance returned by the server immediately after the credit deduction.
+    let balance: Int
+    /// Backend work ID — the generation endpoint atomically creates a PENDING work
+    /// and returns its ID. Desktop never has to do a separate "upload" step.
+    let workId: String
+    /// Server-side preview asset URL we already downloaded the bytes from. Kept
+    /// in case callers want to display it as the canonical remote asset.
+    let assetUrl: String
 }
 
 actor APIClient {
-    // Supports OpenAI-compatible image endpoints and async providers that return task IDs.
-    private struct SubmitItem: Decodable {
-        let status: String?
-        let task_id: String?
-        // Synchronous-style fields (in case some models return inline):
+    /// All AI generation now goes through the qushenma backend.
+    /// Endpoint: `POST {shenmaBaseUrl}/api/ai/generations`. The backend deducts
+    /// the credit, calls the upstream model, stores the resulting image to
+    /// object storage, and atomically creates a PENDING work in one transaction.
+    /// We then download the image bytes from `previewAsset.url` to use locally.
+    private struct Envelope<T: Decodable>: Decodable {
+        let success: Bool?
+        let code: String?
+        let message: String?
+        let data: T?
+    }
+
+    private struct AssetDto: Decodable {
         let url: String?
-        let b64_json: String?
-    }
-    private struct SubmitEnvelope: Decodable {
-        let code: Int?
-        let data: [SubmitItem]?
-        let error: ErrorBody?
-    }
-    private struct ErrorBody: Decodable {
-        let message: String?
-        let type: String?
+        let mimeType: String?
     }
 
-    // Task polling: GET /tasks/{id} → { code, data: { status, progress, result: { images: [{ url: [..] }] } } }
-    private struct TaskImage: Decodable {
-        let url: [String]?
-    }
-    private struct TaskResult: Decodable {
-        let images: [TaskImage]?
-    }
-    private struct TaskData: Decodable {
+    private struct GenerationResultDto: Decodable {
+        let generationId: String?
         let status: String?
-        let progress: Int?
-        let result: TaskResult?
-        let error: String?
-        let message: String?
-    }
-    private struct TaskEnvelope: Decodable {
-        let code: Int?
-        let data: TaskData?
-        let error: ErrorBody?
+        let chargedCredits: Int?
+        let balance: Int?
+        let workId: String?
+        let previewAsset: AssetDto?
     }
 
-    /// Generate an image. Calls progress(label, fraction 0…1) for UI updates.
-    func generate(baseUrl: String,
-                  apiKey: String,
-                  model: String,
+    func generate(shenmaBaseUrl: String,
+                  token: String,
                   prompt: String,
                   size: String,
-                  debugLogging: Bool = false,
-                  progress: (@Sendable (String, Double) -> Void)? = nil) async throws -> ImageGenerationResult {
-        var trimmed = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        if trimmed.isEmpty { trimmed = "https://api.openai.com/v1" }
-        guard let submitURL = URL(string: "\(trimmed)/images/generations") else {
+                  debugLogging: Bool = false) async throws -> ImageGenerationResult {
+        let trimmed = shenmaBaseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty, let submitURL = URL(string: "\(trimmed)/api/ai/generations") else {
             throw APIError.badResponse(localizedString("error.urlInvalid"))
         }
 
-        // Submit
         var req = URLRequest(url: submitURL)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 60
+        // Backend blocks for the full upstream task lifecycle: submit + polling +
+        // image download. Apimart's gpt-image-2 queue can take 11+ minutes during
+        // load spikes (verified in production). Match the backend's 15-min poll
+        // budget plus a small slack so the desktop doesn't drop the request while
+        // the server's still doing useful work.
+        req.timeoutInterval = 16 * 60
 
         let body: [String: Any] = [
-            "model": model,
+            "model": "gpt-image-2",
             "prompt": prompt,
-            "n": 1,
             "size": size,
+            "publishMode": "pending_review",
+            "clientRequestId": UUID().uuidString
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
 
         APILog.req(enabled: debugLogging, url: submitURL, body: body)
 
-        let (subData, subResp): (Data, URLResponse)
+        let (data, resp): (Data, URLResponse)
         do {
-            (subData, subResp) = try await URLSession.shared.data(for: req)
+            (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
             APILog.info(enabled: debugLogging, "submit network error: \(error.localizedDescription)")
             throw APIError.network(error.localizedDescription)
         }
 
-        guard let subHttp = subResp as? HTTPURLResponse else {
-            APILog.info(enabled: debugLogging, "submit non-HTTP response")
+        guard let http = resp as? HTTPURLResponse else {
             throw APIError.badResponse(localizedString("error.nonHttpResponse"))
         }
-        APILog.resp(enabled: debugLogging, url: submitURL, status: subHttp.statusCode, data: subData)
-        if !(200..<300).contains(subHttp.statusCode) {
-            let body = String(data: subData, encoding: .utf8) ?? ""
-            throw APIError.http(subHttp.statusCode, String(body.prefix(500)))
+        APILog.resp(enabled: debugLogging, url: submitURL, status: http.statusCode, data: data)
+
+        if http.statusCode == 401 {
+            throw APIError.unauthorized
         }
 
-        let envelope: SubmitEnvelope
+        let envelope: Envelope<GenerationResultDto>
         do {
-            envelope = try JSONDecoder().decode(SubmitEnvelope.self, from: subData)
+            envelope = try JSONDecoder().decode(Envelope<GenerationResultDto>.self, from: data)
         } catch {
-            let body = String(data: subData, encoding: .utf8) ?? ""
-            throw APIError.decoding("\(error.localizedDescription) | \(String(body.prefix(300)))")
+            let snippet = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.decoding("\(error.localizedDescription) | \(String(snippet.prefix(300)))")
         }
 
-        if let err = envelope.error?.message {
-            throw APIError.taskFailed(err)
+        guard (200..<300).contains(http.statusCode), envelope.success != false else {
+            let message = envelope.message ?? envelope.code ?? "HTTP \(http.statusCode)"
+            // INSUFFICIENT_CREDITS is a known business code from the shenma backend.
+            if let code = envelope.code, code.uppercased().contains("CREDIT") {
+                throw APIError.insufficientCredits(message)
+            }
+            throw APIError.taskFailed(message)
         }
-        guard let item = envelope.data?.first else {
+
+        guard let result = envelope.data,
+              let assetUrl = result.previewAsset?.url,
+              let workId = result.workId else {
             throw APIError.noImage
         }
 
-        // Sync response path
-        if let urlStr = item.url, let imgUrl = URL(string: urlStr) {
-            return try await downloadImage(from: imgUrl, debugLogging: debugLogging)
-        }
-        if let b64 = item.b64_json, let imgData = Data(base64Encoded: b64) {
-            return ImageGenerationResult(data: imgData, mimeType: "image/png")
+        guard let imgUrl = URL(string: assetUrl) else {
+            throw APIError.badResponse(localizedString("error.urlInvalid"))
         }
 
-        // Async task polling
-        guard let taskId = item.task_id else {
-            throw APIError.noImage
-        }
-        guard let taskURL = URL(string: "\(trimmed)/tasks/\(taskId)") else {
-            throw APIError.badResponse(localizedString("error.taskUrlInvalid"))
-        }
-
-        let imageUrl = try await pollTask(url: taskURL, apiKey: apiKey, debugLogging: debugLogging, progress: progress)
-        return try await downloadImage(from: imageUrl, debugLogging: debugLogging)
+        let download = try await downloadImage(from: imgUrl, debugLogging: debugLogging)
+        return ImageGenerationResult(
+            data: download.data,
+            mimeType: result.previewAsset?.mimeType ?? download.mimeType,
+            balance: result.balance ?? 0,
+            workId: workId,
+            assetUrl: assetUrl
+        )
     }
 
-    private func pollTask(url: URL,
-                          apiKey: String,
-                          debugLogging: Bool,
-                          progress: (@Sendable (String, Double) -> Void)?) async throws -> URL {
-        // Poll up to ~3 minutes. Start fast then back off slightly.
-        let intervalsMs: [UInt64] = Array(repeating: 2_000, count: 90)
-        let maxAttempts = intervalsMs.count
-
-        for attempt in 0..<maxAttempts {
-            try? await Task.sleep(nanoseconds: intervalsMs[attempt] * 1_000_000)
-
-            var req = URLRequest(url: url)
-            req.httpMethod = "GET"
-            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            req.timeoutInterval = 20
-
-            let (data, resp): (Data, URLResponse)
-            do {
-                (data, resp) = try await URLSession.shared.data(for: req)
-            } catch {
-                APILog.info(enabled: debugLogging, "poll#\(attempt) network error: \(error.localizedDescription)")
-                // transient network error — keep trying
-                continue
-            }
-            APILog.poll(enabled: debugLogging,
-                        url: url,
-                        status: (resp as? HTTPURLResponse)?.statusCode ?? -1,
-                        data: data,
-                        attempt: attempt)
-            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                continue
-            }
-
-            let env: TaskEnvelope
-            do {
-                env = try JSONDecoder().decode(TaskEnvelope.self, from: data)
-            } catch {
-                continue
-            }
-
-            let status = env.data?.status?.lowercased() ?? ""
-            let pct = Double(env.data?.progress ?? 0) / 100.0
-
-            switch status {
-            case "completed", "succeeded", "success":
-                guard let urlStr = env.data?.result?.images?.first?.url?.first,
-                      let imgUrl = URL(string: urlStr) else {
-                    throw APIError.noImage
-                }
-                progress?(localizedString("gen.downloading"), 0.85)
-                return imgUrl
-            case "failed", "error":
-                throw APIError.taskFailed(env.data?.error ?? env.data?.message ?? localizedString("error.unknown"))
-            default:
-                // pending / running / processing / submitted
-                let frac = max(0.55, min(0.80, 0.55 + pct * 0.25))
-                progress?(String(format: localizedString("gen.progress"), Int(pct*100)), frac)
-            }
-        }
-        throw APIError.taskTimeout
-    }
-
-    private func downloadImage(from url: URL, debugLogging: Bool = false) async throws -> ImageGenerationResult {
+    private func downloadImage(from url: URL, debugLogging: Bool = false) async throws -> (data: Data, mimeType: String) {
         APILog.info(enabled: debugLogging, "download image: \(url.absoluteString)")
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             let mime = (resp as? HTTPURLResponse)?.mimeType ?? "image/png"
-            return ImageGenerationResult(data: data, mimeType: mime)
+            return (data, mime)
         } catch {
             APILog.info(enabled: debugLogging, "download error: \(error.localizedDescription)")
             throw APIError.network(error.localizedDescription)

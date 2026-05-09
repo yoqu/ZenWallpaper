@@ -42,7 +42,14 @@ final class WallpaperManager: ObservableObject {
         try? data.write(to: indexFile)
     }
 
-    func addNew(imageData: Data, mimeType: String, prompt: String, style: String, mood: String, cacheLimit: Int) -> Wallpaper? {
+    func addNew(imageData: Data,
+                mimeType: String,
+                prompt: String,
+                style: String,
+                mood: String,
+                cacheLimit: Int,
+                remoteWorkId: String? = nil,
+                reviewStatus: String? = nil) -> Wallpaper? {
         let ext = (mimeType.contains("jpeg") || mimeType.contains("jpg")) ? "jpg" : "png"
         let id = UUID().uuidString
         let url = cacheDir.appendingPathComponent("\(id).\(ext)")
@@ -54,7 +61,9 @@ final class WallpaperManager: ObservableObject {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         let wp = Wallpaper(id: id, date: f.string(from: Date()),
                            prompt: prompt, style: style, mood: mood,
-                           filePath: url.path)
+                           filePath: url.path,
+                           remoteWorkId: remoteWorkId,
+                           reviewStatus: reviewStatus)
         wallpapers.insert(wp, at: 0)
         if wallpapers.count > cacheLimit {
             let removed = wallpapers.suffix(wallpapers.count - cacheLimit)
@@ -132,6 +141,38 @@ final class WallpaperManager: ObservableObject {
             if d < bestDelta { best = c; bestDelta = d }
         }
         return best.label
+    }
+
+    /// Closest matching aspect-ratio slug (`"16:9"`, `"3:2"`, ...) for the
+    /// current main screen. Used to filter the cloud-library list down to
+    /// works that actually fit the user's display before showing them.
+    /// The candidate set mirrors `WorkSpecifications.aspectRatioValues` on
+    /// the backend so a desktop-issued ratio always lines up with the
+    /// server's tag/asset normalization.
+    static func currentAspectRatioSlug() -> String {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let ratio = Double(frame.width / max(frame.height, 1))
+
+        struct Candidate { let slug: String; let value: Double }
+        let candidates: [Candidate] = [
+            Candidate(slug: "16:9", value: 16.0 / 9.0),
+            Candidate(slug: "3:2",  value: 3.0 / 2.0),
+            Candidate(slug: "4:3",  value: 4.0 / 3.0),
+            Candidate(slug: "5:4",  value: 5.0 / 4.0),
+            Candidate(slug: "1:1",  value: 1.0),
+            Candidate(slug: "4:5",  value: 4.0 / 5.0),
+            Candidate(slug: "3:4",  value: 3.0 / 4.0),
+            Candidate(slug: "2:3",  value: 2.0 / 3.0),
+            Candidate(slug: "9:16", value: 9.0 / 16.0)
+        ]
+        var best = candidates[0]
+        var bestDelta = abs(log(best.value / ratio))
+        for c in candidates.dropFirst() {
+            let d = abs(log(c.value / ratio))
+            if d < bestDelta { best = c; bestDelta = d }
+        }
+        return best.slug
     }
 
     static func describeMainScreen() -> String {

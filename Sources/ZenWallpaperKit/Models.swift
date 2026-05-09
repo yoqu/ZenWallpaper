@@ -8,8 +8,50 @@ struct Wallpaper: Identifiable, Codable, Hashable {
     let style: String
     let mood: String
     let filePath: String
+    var remoteWorkId: String?
+    /// Server-side moderation state captured at the time the wallpaper landed
+    /// in the local cache. One of "pending" / "approved" / "rejected", or nil
+    /// for legacy entries saved before the cloud-library integration.
+    var reviewStatus: String?
 
     var fileURL: URL { URL(fileURLWithPath: filePath) }
+}
+
+/// One row in the cloud-library list. Mirrors a subset of the backend
+/// `WorkSummaryDto` payload — only the fields the popover actually renders.
+struct RemoteWork: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let assetUrl: String
+    let mimeType: String
+    let aspectRatio: String?
+    /// One of "pending" / "approved" / "rejected" (lowercased server enum).
+    let moderationStatus: String
+    let publishedAt: Date?
+    let tagNames: [String]
+}
+
+/// Build the qushenma detail-page URL for a given work. The URL is computed
+/// from the user's *current* `settings.shenmaBaseUrl` so that switching the
+/// endpoint in Settings (production ⇄ local dev) immediately re-targets every
+/// "View on qushenma" link in the popover, including links for wallpapers
+/// that were already in the local history.
+func makeWorkDetailUrl(workId: String?, baseUrl: String) -> URL? {
+    guard let workId, !workId.isEmpty else { return nil }
+    let trimmed = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+    guard !trimmed.isEmpty else { return nil }
+    return URL(string: "\(trimmed)/works/\(workId)")
+}
+
+/// One row of the qushenma credit ledger. Mirrors the shape returned by
+/// `GET /api/credits/transactions/me` — we only surface the four fields the
+/// history page actually displays.
+struct CreditTransaction: Identifiable, Codable, Hashable {
+    let id: String
+    let amount: Int
+    let type: String
+    let reason: String?
+    let createdAt: Date
 }
 
 struct MoodOption: Identifiable, Hashable {

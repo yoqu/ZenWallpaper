@@ -8,6 +8,7 @@ final class AutoWallpaperScheduler: ObservableObject {
     private let settings: AppSettings
     private let manager: WallpaperManager
     private let generator: GenerationCoordinator
+    private let shenma: ShenmaConnectionManager
     private let defaults = UserDefaults.standard
     private let calendar = Calendar.current
     private var l10n: LocalizationManager { LocalizationManager.shared }
@@ -24,10 +25,12 @@ final class AutoWallpaperScheduler: ObservableObject {
 
     init(settings: AppSettings,
          manager: WallpaperManager,
-         generator: GenerationCoordinator) {
+         generator: GenerationCoordinator,
+         shenma: ShenmaConnectionManager) {
         self.settings = settings
         self.manager = manager
         self.generator = generator
+        self.shenma = shenma
         start()
     }
 
@@ -82,8 +85,10 @@ final class AutoWallpaperScheduler: ObservableObject {
         defer { isChecking = false }
 
         let now = Date()
-        guard !settings.apiKey.isEmpty else {
-            statusText = l10n.t("auto.status.noKey")
+        // Generation is gated on a live qushenma session. Skip the run quietly
+        // — the popover surfaces the same hint, no need to spam the status line.
+        guard shenma.isConnected else {
+            statusText = l10n.t("auto.status.noLogin")
             return
         }
 
@@ -111,6 +116,7 @@ final class AutoWallpaperScheduler: ObservableObject {
         let succeeded = await generator.generate(
             settings: settings,
             manager: manager,
+            shenma: shenma,
             mood: describeMood(energy: settings.moodEnergy, valence: settings.moodValence),
             moodEnergy: settings.moodEnergy,
             moodValence: settings.moodValence,
