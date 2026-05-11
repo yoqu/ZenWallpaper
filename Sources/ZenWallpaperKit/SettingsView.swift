@@ -11,6 +11,14 @@ struct SettingsView: View {
 
     @State private var showWeChatQR = false
 
+    private func modeHint(_ mode: MultiDisplayMode) -> String {
+        switch mode {
+        case .unified:    return l10n.t("settings.multiDisplay.unifiedHint")
+        case .perDisplay: return l10n.t("settings.multiDisplay.perDisplayHint")
+        case .mainOnly:   return l10n.t("settings.multiDisplay.mainOnlyHint")
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -52,13 +60,35 @@ struct SettingsView: View {
                     }
                     LabeledContent(l10n.t("settings.imageSize")) {
                         VStack(alignment: .trailing, spacing: 1) {
-                            Text(WallpaperManager.bestSizeForMainScreen())
+                            Text(WallpaperScreenPolicy.bestSizeForMainScreen())
                                 .font(.caption.monospacedDigit())
-                            Text(l10n.t("settings.fitsScreen", WallpaperManager.describeMainScreen()))
+                            Text(l10n.t("settings.fitsScreen", WallpaperScreenPolicy.describeMainScreen()))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
                     }
+                }
+
+                Section(l10n.t("settings.section.display")) {
+                    Picker(l10n.t("settings.multiDisplay.mode"), selection: Binding(
+                        get: { settings.multiDisplayMode },
+                        set: { newValue in
+                            settings.multiDisplayMode = newValue
+                            // Apply immediately so the user sees the switch take
+                            // effect without quitting/relaunching the app.
+                            manager.applyCurrent()
+                        }
+                    )) {
+                        ForEach(MultiDisplayMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .controlSize(.small)
+                    Text(modeHint(settings.multiDisplayMode))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    DisplayListView()
                 }
 
                 Section(l10n.t("settings.section.system")) {
@@ -243,6 +273,113 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
         }
+    }
+}
+
+/// Read-only list of connected displays, each annotated with the wallpaper
+/// currently pinned to it (in per-display mode). Re-renders when displays are
+/// added/removed via `screenChangeTick` driven by the screen-parameters
+/// notification, and when assignments change via `manager.displayAssignments`.
+private struct DisplayListView: View {
+    @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var l10n: LocalizationManager
+
+    @State private var screenChangeTick: Int = 0
+
+    var body: some View {
+        let displays = DisplayIdentity.allConnected()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(l10n.t("settings.connectedDisplays"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(displays.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            ForEach(displays) { display in
+                DisplayRow(display: display)
+            }
+        }
+        // Touch the tick so SwiftUI re-evaluates `displays` on hot-plug.
+        .id(screenChangeTick)
+        .onReceive(NotificationCenter.default
+            .publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screenChangeTick &+= 1
+        }
+    }
+}
+
+private struct DisplayRow: View {
+    @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var l10n: LocalizationManager
+
+    let display: DisplayIdentity
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: display.isMain ? "display.2" : "display")
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(display.localizedName)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    if display.isMain {
+                        Text(l10n.t("settings.displayMain"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor.opacity(0.18),
+                                        in: Capsule())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack(spacing: 4) {
+                    Text(display.pixelDescription)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(display.aspectRatioSlug)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(currentLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var currentLabel: String {
+        // Show what the active mode would actually put on this screen, so the
+        // row's "Current" line matches reality instead of just per-display
+        // pins.
+        let descriptor: String?
+        switch settings.multiDisplayMode {
+        case .unified:
+            descriptor = manager.current()?.prompt
+        case .mainOnly:
+            descriptor = display.isMain ? manager.current()?.prompt : nil
+        case .perDisplay:
+            // Explicit pin wins; if none, the per-display fallback is the
+            // latest generated wallpaper (matches WallpaperManager logic).
+            descriptor = manager.wallpaperForDisplay(display.uuid)?.prompt
+                ?? manager.current()?.prompt
+        }
+        if let descriptor, !descriptor.isEmpty {
+            return l10n.t("settings.displayCurrent", descriptor)
+        }
+        return l10n.t("settings.displayNone")
     }
 }
 

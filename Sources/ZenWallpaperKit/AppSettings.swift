@@ -6,7 +6,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("useDate") var useDate: Bool = true
     @AppStorage("useLunar") var useLunar: Bool = true
     @AppStorage("autoFreqRaw") var autoFreqRaw: String = AutoFreq.daily.rawValue
-    @AppStorage("multiDisplay") var multiDisplay: String = "unified"
+    @AppStorage("multiDisplay") var multiDisplay: String = MultiDisplayMode.unified.rawValue
     @AppStorage("cacheLimit") var cacheLimit: Int = 12
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("historyLayoutRaw") var historyLayoutRaw: String = HistoryLayout.rail.rawValue
@@ -28,6 +28,11 @@ final class AppSettings: ObservableObject {
         get { AutoFreq(rawValue: autoFreqRaw) ?? .daily }
         set { autoFreqRaw = newValue.rawValue }
     }
+
+    var multiDisplayMode: MultiDisplayMode {
+        get { MultiDisplayMode(rawValue: multiDisplay) ?? .unified }
+        set { multiDisplay = newValue.rawValue }
+    }
     var historyLayout: HistoryLayout {
         get { HistoryLayout(rawValue: historyLayoutRaw) ?? .rail }
         set { historyLayoutRaw = newValue.rawValue }
@@ -41,6 +46,31 @@ final class AppSettings: ObservableObject {
         let stale = ["https://qushenma.com", "https://qushenma.com/"]
         if stale.contains(shenmaBaseUrl) {
             shenmaBaseUrl = ShenmaEndpoint.production.url
+        }
+    }
+
+    /// SwiftUI persists window frames keyed by the fully-qualified view type
+    /// chain. Two situations leave behind stale keys that SwiftUI's
+    /// `PlatformSceneCache` will still try to deserialize on launch —
+    /// tripping `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` inside
+    /// `addHost` the first time the menu bar icon is clicked:
+    ///   1. `PopoverRoot` migrated `ZenWallpaper → ZenWallpaperKit` module.
+    ///   2. We replaced the legacy `WindowGroup` preview scene with an
+    ///      explicitly-id'd `Window(_:id:)`, leaving the old auto-generated
+    ///      "...AppWindow-1" key dangling.
+    /// Strip any frame key that references a `PopoverRoot` we no longer use.
+    func purgeStaleWindowFrameDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let dict = defaults.dictionaryRepresentation()
+        let stale = dict.keys.filter { key in
+            guard key.hasPrefix("NSWindow Frame") else { return false }
+            // Anything that references the old executable-module PopoverRoot
+            // or the now-removed WindowGroup-style AppWindow suffix is dead.
+            return key.contains("ZenWallpaper.PopoverRoot")
+                || key.hasSuffix("-AppWindow-1")
+        }
+        for key in stale {
+            defaults.removeObject(forKey: key)
         }
     }
 }

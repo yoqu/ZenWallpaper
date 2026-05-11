@@ -5,8 +5,13 @@ import AppKit
 final class WallpaperManager: ObservableObject {
     @Published var wallpapers: [Wallpaper] = []
     @Published var currentId: String?
+    /// Mirror of the assignment store so SwiftUI re-renders when assignments
+    /// change. Don't mutate this directly — go through `setForDisplay` etc.
+    @Published private(set) var displayAssignments: [String: String] = [:]
 
     private let fm = FileManager.default
+    private let assignmentStore: DisplayAssignmentStore
+    private var screenChangeObserver: NSObjectProtocol?
 
     var cacheDir: URL {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -23,8 +28,24 @@ final class WallpaperManager: ObservableObject {
     }
 
     init() {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let root = base.appendingPathComponent("ZenWallpaper", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        self.assignmentStore = DisplayAssignmentStore(
+            storeFile: root.appendingPathComponent("displays.json")
+        )
+        self.displayAssignments = assignmentStore.assignments
         load()
+        subscribeScreenChanges()
     }
+
+    deinit {
+        if let obs = screenChangeObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
+    // MARK: History / cache
 
     func load() {
         guard let data = try? Data(contentsOf: indexFile),
@@ -35,6 +56,13 @@ final class WallpaperManager: ObservableObject {
         let valid = arr.filter { fm.fileExists(atPath: $0.filePath) }
         wallpapers = valid
         currentId = valid.first?.id
+        // Drop assignments whose target file got pruned out of the cache.
+        let liveIds = Set(valid.map { $0.id })
+        let missing = Set(assignmentStore.assignments.values).subtracting(liveIds)
+        if !missing.isEmpty {
+            assignmentStore.purge(missingWallpaperIds: missing)
+            displayAssignments = assignmentStore.assignments
+        }
     }
 
     func save() {
@@ -70,7 +98,11 @@ final class WallpaperManager: ObservableObject {
             for r in removed {
                 try? fm.removeItem(atPath: r.filePath)
             }
+            let evictedIds = Set(removed.map { $0.id })
             wallpapers = Array(wallpapers.prefix(cacheLimit))
+            // Don't leave per-display entries pointing at files we just deleted.
+            assignmentStore.purge(missingWallpaperIds: evictedIds)
+            displayAssignments = assignmentStore.assignments
         }
         currentId = wp.id
         save()
@@ -82,9 +114,56 @@ final class WallpaperManager: ObservableObject {
         return wallpapers.first
     }
 
+    /// Mark `w` as the current selection and apply through the configured
+    /// multi-display routing. In per-display mode this only affects the main
+    /// display — use `setForDisplay` / `setForAllDisplays` to target others.
     func setCurrent(_ w: Wallpaper) {
         currentId = w.id
-        applyToAllScreens(url: w.fileURL)
+        switch currentMode {
+        case .unified:
+            applyUnified(url: w.fileURL)
+        case .mainOnly:
+            applyMainOnly(url: w.fileURL)
+        case .perDisplay:
+            // Left-click = quick action for the main display. Right-click menu
+            // covers the "send to specific monitor" case.
+            if let main = NSScreen.main,
+               let identity = DisplayIdentity.from(main) {
+                assignmentStore.assign(wallpaperId: w.id, to: identity.uuid)
+                displayAssignments = assignmentStore.assignments
+                apply(url: w.fileURL, to: main)
+            }
+        }
+    }
+
+    /// Pin `wallpaper` to one specific display, persisting the choice in the
+    /// per-display store. Caller is responsible for switching mode to
+    /// `.perDisplay` if they want the binding to win out on relaunch.
+    func setForDisplay(_ wallpaper: Wallpaper, displayUUID: String) {
+        assignmentStore.assign(wallpaperId: wallpaper.id, to: displayUUID)
+        displayAssignments = assignmentStore.assignments
+        if let identity = DisplayIdentity.allConnected().first(where: { $0.uuid == displayUUID }),
+           let screen = identity.screen {
+            apply(url: wallpaper.fileURL, to: screen)
+        }
+    }
+
+    /// Apply `wallpaper` to every connected display and pin it for each one
+    /// in the store. Used by the "all displays" submenu entry.
+    func setForAllDisplays(_ wallpaper: Wallpaper) {
+        currentId = wallpaper.id
+        for identity in DisplayIdentity.allConnected() {
+            assignmentStore.assign(wallpaperId: wallpaper.id, to: identity.uuid)
+            if let screen = identity.screen {
+                apply(url: wallpaper.fileURL, to: screen)
+            }
+        }
+        displayAssignments = assignmentStore.assignments
+    }
+
+    func wallpaperForDisplay(_ uuid: String) -> Wallpaper? {
+        guard let wid = assignmentStore.wallpaperId(for: uuid) else { return nil }
+        return wallpapers.first(where: { $0.id == wid })
     }
 
     func delete(_ w: Wallpaper) {
@@ -92,6 +171,8 @@ final class WallpaperManager: ObservableObject {
         wallpapers.removeAll { $0.id == w.id }
         if currentId == w.id { currentId = wallpapers.first?.id }
         save()
+        assignmentStore.purge(missingWallpaperIds: [w.id])
+        displayAssignments = assignmentStore.assignments
     }
 
     func revealInFinder(_ w: Wallpaper) {
@@ -116,81 +197,76 @@ final class WallpaperManager: ObservableObject {
         NSWorkspace.shared.open(logsDir)
     }
 
-    /// Pick the best generation size for the main screen at the highest resolution
-    /// gpt-image-2 supports. Probed values (verified in production):
-    ///   2048×1152 (16:9 landscape, max)
-    ///   1536×1024 (3:2 landscape — Mac notebooks)
-    ///   1024×1024 (square)
-    ///   1024×1536 (2:3 portrait)
-    static func bestSizeForMainScreen() -> String {
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        let ratio = frame.width / max(frame.height, 1)
+    // MARK: Routing
 
-        struct Candidate { let label: String; let ratio: Double }
-        let candidates: [Candidate] = [
-            Candidate(label: "2048x1152", ratio: 2048.0/1152.0), // 1.778
-            Candidate(label: "1536x1024", ratio: 1536.0/1024.0), // 1.500
-            Candidate(label: "1024x1024", ratio: 1.0),
-            Candidate(label: "1024x1536", ratio: 1024.0/1536.0), // 0.667
-        ]
-        var best = candidates[0]
-        var bestDelta = abs(log(best.ratio / Double(ratio)))
-        for c in candidates.dropFirst() {
-            let d = abs(log(c.ratio / Double(ratio)))
-            if d < bestDelta { best = c; bestDelta = d }
+    /// Re-apply whatever the current state implies — used after the mode
+    /// setting changes and after a display hot-plug.
+    func applyCurrent() {
+        switch currentMode {
+        case .unified:
+            if let w = current() { applyUnified(url: w.fileURL) }
+        case .mainOnly:
+            if let w = current() { applyMainOnly(url: w.fileURL) }
+        case .perDisplay:
+            applyPerDisplay()
         }
-        return best.label
     }
 
-    /// Closest matching aspect-ratio slug (`"16:9"`, `"3:2"`, ...) for the
-    /// current main screen. Used to filter the cloud-library list down to
-    /// works that actually fit the user's display before showing them.
-    /// The candidate set mirrors `WorkSpecifications.aspectRatioValues` on
-    /// the backend so a desktop-issued ratio always lines up with the
-    /// server's tag/asset normalization.
-    static func currentAspectRatioSlug() -> String {
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        let ratio = Double(frame.width / max(frame.height, 1))
-
-        struct Candidate { let slug: String; let value: Double }
-        let candidates: [Candidate] = [
-            Candidate(slug: "16:9", value: 16.0 / 9.0),
-            Candidate(slug: "3:2",  value: 3.0 / 2.0),
-            Candidate(slug: "4:3",  value: 4.0 / 3.0),
-            Candidate(slug: "5:4",  value: 5.0 / 4.0),
-            Candidate(slug: "1:1",  value: 1.0),
-            Candidate(slug: "4:5",  value: 4.0 / 5.0),
-            Candidate(slug: "3:4",  value: 3.0 / 4.0),
-            Candidate(slug: "2:3",  value: 2.0 / 3.0),
-            Candidate(slug: "9:16", value: 9.0 / 16.0)
-        ]
-        var best = candidates[0]
-        var bestDelta = abs(log(best.value / ratio))
-        for c in candidates.dropFirst() {
-            let d = abs(log(c.value / ratio))
-            if d < bestDelta { best = c; bestDelta = d }
-        }
-        return best.slug
+    private var currentMode: MultiDisplayMode {
+        // Read straight from defaults so we stay in sync with @AppStorage in
+        // AppSettings without needing a back-channel reference.
+        let raw = UserDefaults.standard.string(forKey: "multiDisplay")
+            ?? MultiDisplayMode.unified.rawValue
+        return MultiDisplayMode(rawValue: raw) ?? .unified
     }
 
-    static func describeMainScreen() -> String {
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        let scale = screen?.backingScaleFactor ?? 1
-        let pw = Int(frame.width * scale)
-        let ph = Int(frame.height * scale)
-        return "\(pw)×\(ph)"
-    }
-
-    func applyToAllScreens(url: URL) {
-        let ws = NSWorkspace.shared
+    private func applyUnified(url: URL) {
         for screen in NSScreen.screens {
-            do {
-                try ws.setDesktopImageURL(url, for: screen, options: [:])
-            } catch {
-                NSLog("setDesktopImageURL failed: \(error.localizedDescription)")
+            apply(url: url, to: screen)
+        }
+    }
+
+    private func applyMainOnly(url: URL) {
+        guard let screen = NSScreen.main else { return }
+        apply(url: url, to: screen)
+    }
+
+    private func applyPerDisplay() {
+        let fallbackURL = current()?.fileURL
+        for identity in DisplayIdentity.allConnected() {
+            guard let screen = identity.screen else { continue }
+            if let pinned = wallpaperForDisplay(identity.uuid),
+               fm.fileExists(atPath: pinned.filePath) {
+                apply(url: pinned.fileURL, to: screen)
+            } else if let fallbackURL {
+                // New or unpinned display — show the latest generated piece
+                // until the user explicitly assigns something for it.
+                apply(url: fallbackURL, to: screen)
+            }
+        }
+    }
+
+    private func apply(url: URL, to screen: NSScreen) {
+        do {
+            try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [
+                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                .allowClipping: true
+            ])
+        } catch {
+            NSLog("setDesktopImageURL failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func subscribeScreenChanges() {
+        // Fires whenever a display is added, removed, or has its mode changed.
+        // Re-apply so freshly plugged-in monitors pick up the right wallpaper.
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyCurrent()
             }
         }
     }

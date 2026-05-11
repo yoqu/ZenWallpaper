@@ -39,6 +39,9 @@ struct ZenWallpaperApp: App {
         // Bump anyone still on the old `https://qushenma.com` default to the canonical
         // `https://www.qushenma.com`. No-op for users who set their own URL.
         settings.migrateLegacyShenmaBaseUrlIfNeeded()
+        // Drop dead "NSWindow Frame ...ZenWallpaper.PopoverRoot..." entries
+        // left over from when PopoverRoot lived in the executable target.
+        settings.purgeStaleWindowFrameDefaultsIfNeeded()
         let l10n = LocalizationManager.shared
         l10n.language = settings.appLanguage
 
@@ -61,28 +64,12 @@ struct ZenWallpaperApp: App {
     }
 
     var body: some Scene {
-        #if DEBUG
-        WindowGroup("ZenWallpaper Preview") {
-            PopoverRoot()
-                .environmentObject(settings)
-                .environmentObject(manager)
-                .environmentObject(generator)
-                .environmentObject(autoScheduler)
-                .environmentObject(l10n)
-                .environmentObject(shenma)
-                .frame(width: 260, height: 600)
-                .onChange(of: settings.appLanguageRaw) { _, newValue in
-                    l10n.language = AppLanguage(rawValue: newValue) ?? .system
-                }
-                .task {
-                    // Validate the cached qushenma token against the server once the popover
-                    // appears. refresh() only clears local state on a real 401 — transient
-                    // errors leave the cached account in place.
-                    await shenma.refresh(baseUrl: settings.shenmaBaseUrl)
-                }
-        }
-        .windowResizability(.contentSize)
-        #endif
+        // NOTE: The DEBUG-only `WindowGroup("ZenWallpaper Preview") { ... }`
+        // that used to live here was removed — under macOS 26 / SwiftUI 7.4
+        // having both a WindowGroup and a MenuBarExtra(.window) scene against
+        // the same `PopoverRoot` type trips PlatformSceneCache's internal
+        // dictionary with a KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS
+        // crash the first time the menu bar icon is clicked.
         MenuBarExtra {
             PopoverRoot()
                 .environmentObject(settings)

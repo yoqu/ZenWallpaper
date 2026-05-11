@@ -28,7 +28,8 @@ final class GenerationCoordinator: ObservableObject {
                   moodValence: Double,
                   style: String,
                   accent: String,
-                  userPrompt: String) async -> Bool {
+                  userPrompt: String,
+                  targetDisplayUUID: String? = nil) async -> Bool {
         let l10n = LocalizationManager.shared
         guard !isLoading else { return false }
         // Generation is gated on a live qushenma session: the website's API does
@@ -62,7 +63,18 @@ final class GenerationCoordinator: ObservableObject {
         )
         await update(l10n.t("gen.composing"), 0.08)
 
-        let size = WallpaperManager.bestSizeForMainScreen()
+        // In per-display mode the caller hands us the screen the generation is
+        // for, so we can size the prompt to that monitor's aspect ratio
+        // instead of always biasing toward the main display.
+        let targetScreen: NSScreen = {
+            if let uuid = targetDisplayUUID,
+               let identity = DisplayIdentity.allConnected().first(where: { $0.uuid == uuid }),
+               let screen = identity.screen {
+                return screen
+            }
+            return NSScreen.main ?? NSScreen.screens.first ?? NSScreen()
+        }()
+        let size = WallpaperScreenPolicy.bestSize(for: targetScreen)
         await update(l10n.t("gen.calling", size), 0.10)
 
         startSimulatedProgress(from: 0.10,
@@ -113,7 +125,12 @@ final class GenerationCoordinator: ObservableObject {
         }
 
         await update(l10n.t("gen.applying"), Self.simulatedCap)
-        manager.applyToAllScreens(url: wp.fileURL)
+        if let uuid = targetDisplayUUID {
+            // Explicit target → pin to that display only, regardless of mode.
+            manager.setForDisplay(wp, displayUUID: uuid)
+        } else {
+            manager.applyCurrent()
+        }
 
         await update(l10n.t("gen.done"), 1.0)
         try? await Task.sleep(nanoseconds: 200_000_000)

@@ -49,6 +49,17 @@ func runAll() async -> Int {
         ShenmaEndpointTests.customUrlSurvivesMigration()
     }
 
+    print("\nWallpaperCatalog")
+    _ = TestReporter.run("detail URL is built from the current base URL") {
+        WallpaperCatalogTests.detailUrlIsBuiltFromCurrentBaseUrl()
+    }
+    _ = TestReporter.run("mood key maps energy and valence") {
+        WallpaperCatalogTests.moodKeyMapsEnergyAndValence()
+    }
+    _ = TestReporter.run("prompt composer includes selected fields") {
+        WallpaperCatalogTests.promptComposerIncludesSelectedFields()
+    }
+
     print("\nShenmaConnectionManager.handleConnectCallback")
     _ = TestReporter.run("user-code normalization matches the server's rules") {
         ShenmaCallbackTests.userCodeNormalizationMatchesServerRules()

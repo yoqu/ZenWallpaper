@@ -70,6 +70,13 @@ struct MainPopoverView: View {
     let openSettings: () -> Void
     let openCredits: () -> Void
 
+    /// In per-display mode, which display the next Generate call should target.
+    /// Lazily defaulted to the main display's UUID the first time the picker
+    /// renders; we don't pull it from AppStorage because the user's "default
+    /// target" is naturally "whichever screen the menu bar happens to be on".
+    @State private var targetDisplayUUID: String?
+    @State private var screenChangeTick: Int = 0
+
     var body: some View {
         VStack(spacing: 0) {
             // Title bar
@@ -181,6 +188,8 @@ struct MainPopoverView: View {
                         .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
                     }
 
+                    targetDisplayPicker
+
                     Button(action: triggerGenerate) {
                         HStack(spacing: 6) {
                             if generator.isLoading {
@@ -219,6 +228,12 @@ struct MainPopoverView: View {
     }
 
     private func triggerGenerate() {
+        // Only forward a target when per-display mode is on; in unified /
+        // main-only modes the coordinator routes through `applyCurrent()`
+        // which already does the right thing.
+        let target: String? = settings.multiDisplayMode == .perDisplay
+            ? (targetDisplayUUID ?? mainDisplayUUID())
+            : nil
         Task {
             await generator.generate(
                 settings: settings,
@@ -229,9 +244,51 @@ struct MainPopoverView: View {
                 moodValence: moodValence,
                 style: style,
                 accent: accent,
-                userPrompt: userPrompt
+                userPrompt: userPrompt,
+                targetDisplayUUID: target
             )
         }
+    }
+
+    @ViewBuilder
+    private var targetDisplayPicker: some View {
+        let displays = DisplayIdentity.allConnected()
+        if settings.multiDisplayMode == .perDisplay && displays.count > 1 {
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.on.rectangle")
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+                Text(l10n.t("popover.targetDisplay"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: Binding<String>(
+                    get: { targetDisplayUUID ?? mainDisplayUUID() ?? displays.first?.uuid ?? "" },
+                    set: { targetDisplayUUID = $0 }
+                )) {
+                    ForEach(displays) { d in
+                        Text(d.localizedName).tag(d.uuid)
+                    }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 140)
+            }
+            .id(screenChangeTick)
+            .onReceive(NotificationCenter.default
+                .publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+                screenChangeTick &+= 1
+                if let uuid = targetDisplayUUID,
+                   !displays.contains(where: { $0.uuid == uuid }) {
+                    targetDisplayUUID = nil
+                }
+            }
+        }
+    }
+
+    private func mainDisplayUUID() -> String? {
+        guard let main = NSScreen.main else { return nil }
+        return DisplayIdentity.from(main)?.uuid
     }
 }
 
@@ -300,71 +357,210 @@ struct TodayHeroView: View {
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var generator: GenerationCoordinator
     @EnvironmentObject var l10n: LocalizationManager
+    @EnvironmentObject var settings: AppSettings
+
+    @State private var screenChangeTick: Int = 0
 
     var body: some View {
         ZStack {
-            if let w = manager.current(), let img = NSImage(contentsOfFile: w.filePath) {
-                Image(nsImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 130)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(alignment: .bottomLeading) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(w.prompt)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            Text("\(l10n.t("style.\(w.style)")) · \(localizedMoodLabel(forKey: w.mood))")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(LinearGradient(colors: [.black.opacity(0.6), .clear],
-                                                   startPoint: .bottom, endPoint: .top))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .contextMenu {
-                        Button(l10n.t("common.openInFinder")) { manager.revealInFinder(w) }
-                    }
+            if shouldUseSplit {
+                splitHero
             } else {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(LinearGradient(colors: [.accentColor.opacity(0.5), .accentColor.opacity(0.2)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(height: 130)
-                    .overlay {
-                        VStack(spacing: 4) {
-                            Image(systemName: "moon.stars")
-                                .font(.system(size: 22))
-                            Text(l10n.t("popover.heroPlaceholder"))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                singleHero
             }
 
             if generator.isLoading {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(.black.opacity(0.55))
-                    .frame(height: 130)
-                VStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.regular)
-                        .tint(.white)
-                    Text(generator.loadingLabel)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.9))
-                    ProgressView(value: generator.loadingProgress, total: 1.0)
-                        .progressViewStyle(.linear)
-                        .tint(.white)
-                        .frame(width: 140)
-                }
+                loadingOverlay
             }
         }
-        .frame(height: 130)
+        // Height is set inside `singleHero` (130pt) but left flexible for
+        // `splitHero`, which shrinks proportionally to keep each tile at the
+        // image's true aspect ratio (so 16:9 wallpapers don't get cropped
+        // into square thumbnails when two displays render side-by-side).
+        .id(screenChangeTick)
+        .onReceive(NotificationCenter.default
+            .publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screenChangeTick &+= 1
+        }
+    }
+
+    /// Split into per-display tiles only when the user is in per-display mode,
+    /// has multiple displays connected, AND at least two of them are showing
+    /// different wallpapers right now. Otherwise the single big hero stays —
+    /// no point in shrinking it to show three identical tiles.
+    private var shouldUseSplit: Bool {
+        guard settings.multiDisplayMode == .perDisplay else { return false }
+        let displays = DisplayIdentity.allConnected()
+        guard displays.count > 1 else { return false }
+        let ids: [String] = displays.compactMap { d in
+            (manager.wallpaperForDisplay(d.uuid) ?? manager.current())?.id
+        }
+        return Set(ids).count > 1
+    }
+
+    @ViewBuilder
+    private var splitHero: some View {
+        // Plain HStack: each tile claims `maxWidth: .infinity` so the HStack
+        // divides the available 236pt-ish row evenly. We deliberately avoid
+        // `GeometryReader` here — under `MenuBarExtra(.window)` it can fire
+        // with size=(0,0) on the first layout pass and trip the SwiftUI scene
+        // cache (KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS crash).
+        HStack(spacing: 6) {
+            ForEach(DisplayIdentity.allConnected()) { display in
+                DisplayHeroTile(display: display)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var singleHero: some View {
+        if let w = manager.current(), let img = NSImage(contentsOfFile: w.filePath) {
+            Image(nsImage: img)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(height: 130)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(w.prompt)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text("\(l10n.t("style.\(w.style)")) · \(localizedMoodLabel(forKey: w.mood))")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(LinearGradient(colors: [.black.opacity(0.6), .clear],
+                                               startPoint: .bottom, endPoint: .top))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .contextMenu {
+                    Button(l10n.t("common.openInFinder")) { manager.revealInFinder(w) }
+                }
+        } else {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(LinearGradient(colors: [.accentColor.opacity(0.5), .accentColor.opacity(0.2)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(height: 130)
+                .overlay {
+                    VStack(spacing: 4) {
+                        Image(systemName: "moon.stars")
+                            .font(.system(size: 22))
+                        Text(l10n.t("popover.heroPlaceholder"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var loadingOverlay: some View {
+        ZStack {
+            // No fixed height: matches whatever the hero (single or split) is.
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.black.opacity(0.55))
+            VStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(.white)
+                Text(generator.loadingLabel)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.9))
+                ProgressView(value: generator.loadingProgress, total: 1.0)
+                    .progressViewStyle(.linear)
+                    .tint(.white)
+                    .frame(width: 140)
+            }
+        }
+    }
+}
+
+/// Single tile in the split hero. Two key constraints:
+///
+///   1. Each tile owns its image's true aspect ratio. We never crop a 16:9
+///      wallpaper into a near-square thumbnail just because we split the row.
+///   2. The tile width is whatever the HStack hands us. We never echo the
+///      Image's intrinsic pixel size back to the parent (would widen the
+///      popover window).
+///
+/// Both come from the same primitive: `Color.clear.aspectRatio(imgRatio,
+/// contentMode: .fit)`. Color.clear accepts any proposed width without
+/// pushing back, and `aspectRatio` then makes the *frame* match the image —
+/// so the Image overlay fills exactly with no letterbox and no crop.
+private struct DisplayHeroTile: View {
+    @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var l10n: LocalizationManager
+
+    let display: DisplayIdentity
+
+    var body: some View {
+        let wallpaper = manager.wallpaperForDisplay(display.uuid) ?? manager.current()
+        let nsImage: NSImage? = wallpaper.flatMap { NSImage(contentsOfFile: $0.filePath) }
+        let aspect: CGFloat = {
+            if let img = nsImage, img.size.height > 0 {
+                return max(img.size.width / img.size.height, 0.1)
+            }
+            // No image yet — fall back to the display's own aspect so the
+            // placeholder tile still has the right shape.
+            return max(display.frame.width / max(display.frame.height, 1), 0.1)
+        }()
+
+        ZStack(alignment: .bottom) {
+            Color.clear
+                .aspectRatio(aspect, contentMode: .fit)
+                .overlay {
+                    if let img = nsImage {
+                        Image(nsImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        LinearGradient(colors: [.accentColor.opacity(0.45),
+                                                .accentColor.opacity(0.18)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                            .overlay {
+                                Image(systemName: "moon.stars")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            HStack(spacing: 3) {
+                Image(systemName: display.isMain ? "display.2" : "display")
+                    .font(.system(size: 9))
+                Text(display.localizedName)
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if display.isMain {
+                    Text(l10n.t("settings.displayMain"))
+                        .font(.system(size: 8, weight: .semibold))
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.25), in: Capsule())
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(LinearGradient(colors: [.black.opacity(0.7), .clear],
+                                       startPoint: .bottom, endPoint: .top))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .help(wallpaper?.prompt ?? "")
+        .contextMenu {
+            if let w = wallpaper {
+                Button(l10n.t("common.openInFinder")) { manager.revealInFinder(w) }
+            }
+        }
     }
 }
 
@@ -406,6 +602,53 @@ struct LunarStripView: View {
                 .foregroundStyle(.secondary)
             Spacer()
         }
+    }
+}
+
+// MARK: Per-display submenu builder
+
+/// "Set on display" context-menu entry. In single-display setups (or non-
+/// per-display modes) this collapses to a plain "Set as wallpaper" button so
+/// the right-click menu doesn't gain a useless nested level. In per-display
+/// mode with 2+ screens it becomes a submenu with one entry per display plus
+/// an "All displays" shortcut.
+struct SetOnDisplayMenu: View {
+    @EnvironmentObject var manager: WallpaperManager
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var l10n: LocalizationManager
+
+    let wallpaper: Wallpaper
+    var onApply: (() -> Void)? = nil
+
+    var body: some View {
+        let displays = DisplayIdentity.allConnected()
+        if settings.multiDisplayMode == .perDisplay && displays.count > 1 {
+            Menu(l10n.t("popover.setOnDisplay")) {
+                ForEach(displays) { d in
+                    Button(rowLabel(for: d)) {
+                        manager.setForDisplay(wallpaper, displayUUID: d.uuid)
+                        onApply?()
+                    }
+                }
+                Divider()
+                Button(l10n.t("popover.setOnAllDisplays")) {
+                    manager.setForAllDisplays(wallpaper)
+                    onApply?()
+                }
+            }
+        } else {
+            Button(l10n.t("popover.contextSetWallpaper")) {
+                manager.setCurrent(wallpaper)
+                onApply?()
+            }
+        }
+    }
+
+    private func rowLabel(for display: DisplayIdentity) -> String {
+        if display.isMain {
+            return "\(display.localizedName) · \(l10n.t("settings.displayMain"))"
+        }
+        return display.localizedName
     }
 }
 
@@ -513,7 +756,7 @@ private struct HistoryRailItem: View {
             .frame(width: 72)
         }
         .contextMenu {
-            Button(l10n.t("popover.contextSetWallpaper")) { manager.setCurrent(wallpaper) }
+            SetOnDisplayMenu(wallpaper: wallpaper)
             Button(l10n.t("common.openInFinder")) { manager.revealInFinder(wallpaper) }
             if let url = makeWorkDetailUrl(workId: wallpaper.remoteWorkId,
                                            baseUrl: settings.shenmaBaseUrl) {
@@ -608,7 +851,7 @@ struct CloudLibrarySection: View {
     private func refresh() async {
         await shenma.fetchCloudWorks(
             baseUrl: settings.shenmaBaseUrl,
-            aspectRatio: WallpaperManager.currentAspectRatioSlug(),
+            aspectRatio: WallpaperScreenPolicy.currentAspectRatioSlug(),
             tagSlug: nil
         )
     }
@@ -623,7 +866,6 @@ private struct CloudLibraryItem: View {
 
     @State private var thumbnail: NSImage?
     @State private var isApplying = false
-    @State private var applyError: String?
 
     var body: some View {
         VStack(spacing: 3) {
@@ -732,6 +974,14 @@ private struct CloudLibraryItem: View {
         guard !isApplying, let url = URL(string: item.assetUrl) else { return }
         isApplying = true
         defer { isApplying = false }
+        // Skip re-download if this cloud work is already cached locally.
+        if let existing = manager.wallpapers.first(where: {
+            $0.remoteWorkId == item.id
+                && FileManager.default.fileExists(atPath: $0.filePath)
+        }) {
+            manager.setCurrent(existing)
+            return
+        }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             let mime = (response as? HTTPURLResponse)?.mimeType ?? item.mimeType
@@ -751,7 +1001,6 @@ private struct CloudLibraryItem: View {
                 manager.setCurrent(saved)
             }
         } catch {
-            applyError = error.localizedDescription
         }
     }
 }
