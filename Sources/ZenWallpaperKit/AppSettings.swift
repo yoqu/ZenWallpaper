@@ -39,11 +39,14 @@ final class AppSettings: ObservableObject {
     }
 
     /// One-time migration from older defaults. Earlier builds shipped with
-    /// `https://qushenma.com` (no `www.`); the canonical production URL is now
-    /// `https://www.qushenma.com`. If the user is still on the old default, bump
-    /// them automatically — anyone who deliberately changed it keeps their value.
+    /// `https://uyoqu.com` or `https://www.uyoqu.com`; the canonical
+    /// production URL is now `https://www.uyoqu.com`. If the user is still on
+    /// any old default, bump them automatically.
     func migrateLegacyShenmaBaseUrlIfNeeded() {
-        let stale = ["https://qushenma.com", "https://qushenma.com/"]
+        let stale = [
+            "https://uyoqu.com", "https://uyoqu.com/",
+            "https://www.uyoqu.com", "https://www.uyoqu.com/"
+        ]
         if stale.contains(shenmaBaseUrl) {
             shenmaBaseUrl = ShenmaEndpoint.production.url
         }
@@ -88,7 +91,7 @@ enum ShenmaEndpoint: String, CaseIterable, Identifiable {
     /// should preserve whatever the user typed.
     var url: String {
         switch self {
-        case .production: return "https://www.qushenma.com"
+        case .production: return "https://www.uyoqu.com"
         case .localhost:  return "http://127.0.0.1:5173"
         case .custom:     return ""
         }
@@ -101,7 +104,8 @@ enum ShenmaEndpoint: String, CaseIterable, Identifiable {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
         if trimmed == ShenmaEndpoint.production.url
-            || trimmed == "https://qushenma.com" {
+            || trimmed == "https://uyoqu.com"
+            || trimmed == "https://www.uyoqu.com" {
             return .production
         }
         // Treat 127.0.0.1 and localhost as the same preset on common dev ports.

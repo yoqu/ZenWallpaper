@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
+import os.log
 import Security
+
+private let shenmaLog = Logger(subsystem: "com.zen.wallpaper", category: "Shenma")
 
 struct ShenmaUser: Codable, Equatable {
     let id: String
@@ -87,6 +90,8 @@ actor ShenmaAuthClient {
         let url: String?
         let mimeType: String?
         let aspectRatio: String?
+        let width: Int?
+        let height: Int?
     }
 
     struct WorkTagDto: Decodable {
@@ -114,6 +119,29 @@ actor ShenmaAuthClient {
         let size: Int
         let total: Int
         let hasMore: Bool
+    }
+
+    struct CollectionSummaryDto: Decodable {
+        let id: String
+        let title: String
+        let itemCount: Int
+        let isDefault: Bool
+    }
+
+    struct CollectionsPageResponse: Decodable {
+        let items: [CollectionSummaryDto]
+        let page: Int
+        let size: Int
+        let total: Int
+        let hasMore: Bool
+    }
+
+    struct CollectionDetailDto: Decodable {
+        let id: String
+        let title: String
+        let itemCount: Int
+        let isDefault: Bool
+        let works: WorksPageResponse
     }
 
     func myWorks(
@@ -147,6 +175,57 @@ actor ShenmaAuthClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return try await send(req, as: WorksPageResponse.self)
+    }
+
+    func collections(
+        baseUrl: String,
+        token: String,
+        userId: String,
+        page: Int,
+        size: Int
+    ) async throws -> CollectionsPageResponse {
+        let trimmed = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty,
+              var components = URLComponents(string: "\(trimmed)/api/users/\(userId)/collections") else {
+            throw ShenmaConnectionError.badUrl
+        }
+        components.queryItems = [
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "size", value: String(size)),
+            URLQueryItem(name: "includeDefault", value: "true")
+        ]
+        guard let url = components.url else { throw ShenmaConnectionError.badUrl }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return try await send(req, as: CollectionsPageResponse.self)
+    }
+
+    func collectionWorks(
+        baseUrl: String,
+        token: String,
+        collectionId: String,
+        page: Int,
+        size: Int
+    ) async throws -> CollectionDetailDto {
+        let trimmed = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty,
+              var components = URLComponents(string: "\(trimmed)/api/collections/\(collectionId)") else {
+            throw ShenmaConnectionError.badUrl
+        }
+        components.queryItems = [
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "size", value: String(size))
+        ]
+        guard let url = components.url else { throw ShenmaConnectionError.badUrl }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return try await send(req, as: CollectionDetailDto.self)
     }
 
     func startDeviceAuth(baseUrl: String, deviceName: String, appVersion: String?) async throws -> DeviceStartResponse {
@@ -269,6 +348,13 @@ final class ShenmaConnectionManager: ObservableObject {
     @Published private(set) var cloudWorks: [RemoteWork] = []
     @Published private(set) var isLoadingCloudWorks = false
     @Published var cloudWorksError: String?
+
+    @Published private(set) var collections: [RemoteCollection] = []
+    @Published private(set) var isLoadingCollections = false
+    /// Per-collection works cache, keyed by collection ID.
+    @Published private(set) var collectionWorks: [String: [RemoteWork]] = [:]
+    @Published private(set) var isLoadingCollectionWorks = false
+    @Published var collectionsError: String?
 
     private let client = ShenmaAuthClient()
     private var pollTask: Task<Void, Never>?
@@ -430,8 +516,99 @@ final class ShenmaConnectionManager: ObservableObject {
         }
     }
 
+    /// Fetch the user's collection list from qushenma.
+    func fetchCollections(baseUrl: String) async {
+        guard let token = ShenmaKeychain.loadToken(),
+              let userId = account?.user.id else {
+            collections = []
+            return
+        }
+        isLoadingCollections = true
+        defer { isLoadingCollections = false }
+        do {
+            let response = try await client.collections(
+                baseUrl: baseUrl,
+                token: token,
+                userId: userId,
+                page: 1,
+                size: 50
+            )
+            collections = response.items.map {
+                RemoteCollection(
+                    id: $0.id,
+                    title: $0.title,
+                    itemCount: $0.itemCount,
+                    isDefault: $0.isDefault
+                )
+            }
+            collectionsError = nil
+        } catch ShenmaConnectionError.http(401, _) {
+            ShenmaKeychain.deleteToken()
+            account = nil
+            creditBalance = nil
+            collections = []
+            collectionWorks = [:]
+            saveAccount(nil)
+        } catch {
+            collectionsError = error.localizedDescription
+        }
+    }
+
+    /// Fetch works inside a specific collection. Client-side aspect ratio
+    /// filtering is applied when `aspectRatio` is non-nil.
+    func fetchCollectionWorks(baseUrl: String, collectionId: String, aspectRatio: String?) async {
+        guard let token = ShenmaKeychain.loadToken() else {
+            collectionWorks[collectionId] = []
+            return
+        }
+        isLoadingCollectionWorks = true
+        defer { isLoadingCollectionWorks = false }
+        do {
+            let response = try await client.collectionWorks(
+                baseUrl: baseUrl,
+                token: token,
+                collectionId: collectionId,
+                page: 1,
+                size: 50
+            )
+            collectionWorks[collectionId] = response.works.items.compactMap { dto in
+                guard let url = dto.coverAsset?.url, !url.isEmpty else { return nil }
+                if let targetSlug = aspectRatio,
+                   let w = dto.coverAsset?.width, let h = dto.coverAsset?.height,
+                   w > 0 && h > 0 {
+                    let ratio = Double(w) / Double(h)
+                    let slug = DisplayIdentity.closestRatioSlug(for: ratio)
+                    if slug != targetSlug { return nil }
+                }
+                return RemoteWork(
+                    id: dto.id,
+                    title: dto.title ?? "",
+                    assetUrl: url,
+                    mimeType: dto.coverAsset?.mimeType ?? "image/png",
+                    aspectRatio: dto.coverAsset?.aspectRatio,
+                    moderationStatus: (dto.moderationStatus ?? "approved").lowercased(),
+                    publishedAt: dto.publishedAt,
+                    tagNames: (dto.tags ?? []).map { $0.name }
+                )
+            }
+        } catch ShenmaConnectionError.http(401, _) {
+            ShenmaKeychain.deleteToken()
+            account = nil
+            creditBalance = nil
+            collections = []
+            collectionWorks = [:]
+            saveAccount(nil)
+        } catch {
+            collectionsError = error.localizedDescription
+        }
+    }
+
     func connect(baseUrl: String) async {
-        guard !isConnecting else { return }
+        guard !isConnecting else {
+            shenmaLog.notice("[Shenma] connect: already connecting, ignoring")
+            return
+        }
+        shenmaLog.notice("[Shenma] connect: starting device auth flow, baseUrl=\(baseUrl)")
         isConnecting = true
         lastError = nil
         userCode = nil
@@ -443,15 +620,18 @@ final class ShenmaConnectionManager: ObservableObject {
                 appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             )
             userCode = start.userCode
+            shenmaLog.notice("[Shenma] connect: got userCode=\(start.userCode), expiresIn=\(start.expiresIn), interval=\(start.interval)")
             // Stash device-flow context so an incoming `zenwallpaper://connected?code=...`
             // deeplink can verify + accelerate this same session.
             pendingDeviceCode = start.deviceCode
             pendingBaseUrl = baseUrl
             if let url = URL(string: start.verificationUriComplete) {
+                shenmaLog.notice("[Shenma] connect: opening browser to \(url)")
                 NSWorkspace.shared.open(url)
             }
             startPolling(baseUrl: baseUrl, deviceCode: start.deviceCode, interval: start.interval, expiresIn: start.expiresIn)
         } catch {
+            shenmaLog.notice("[Shenma] connect: startDeviceAuth failed: \(error)")
             isConnecting = false
             lastError = error.localizedDescription
         }
@@ -464,11 +644,24 @@ final class ShenmaConnectionManager: ObservableObject {
     ///
     /// Safe to call when no connect attempt is in flight — it just returns silently.
     func handleConnectCallback(url: URL) async {
-        guard isConnecting,
-              url.scheme?.lowercased() == "zenwallpaper",
-              let host = url.host?.lowercased(),
-              host == "connected"
-        else { return }
+        shenmaLog.notice("[Shenma] handleConnectCallback: received URL \(url)")
+        guard isConnecting else {
+            shenmaLog.notice("[Shenma] handleConnectCallback: not connecting, ignoring")
+            return
+        }
+        guard url.scheme?.lowercased() == "zenwallpaper" else {
+            shenmaLog.notice("[Shenma] handleConnectCallback: wrong scheme \(url.scheme ?? "nil")")
+            return
+        }
+        // Accept both `url.host` (authority component) and the first path component
+        // as "connected" — on some macOS versions / URL parsers the host can be nil
+        // for custom-scheme URLs while the path holds the value.
+        let hostValue = url.host?.lowercased()
+            ?? url.pathComponents.first(where: { $0 != "/" })?.lowercased()
+        guard hostValue == "connected" else {
+            shenmaLog.notice("[Shenma] handleConnectCallback: unexpected host/path '\(hostValue ?? "nil")' (url.host=\(url.host ?? "nil"), path=\(url.path))")
+            return
+        }
 
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let urlCode = components.queryItems?.first(where: { $0.name == "code" })?.value,
@@ -476,12 +669,22 @@ final class ShenmaConnectionManager: ObservableObject {
               normalizeUserCode(urlCode) == normalizeUserCode(expected),
               let deviceCode = pendingDeviceCode,
               let baseUrl = pendingBaseUrl
-        else { return }
+        else {
+            let dbgUrlCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "code" })?.value ?? "nil"
+            let dbgExpected = userCode ?? "nil"
+            let dbgHasDevice = pendingDeviceCode != nil
+            let dbgHasBase = pendingBaseUrl != nil
+            shenmaLog.notice("[Shenma] handleConnectCallback: code mismatch or missing context (urlCode=\(dbgUrlCode), expected=\(dbgExpected), hasDeviceCode=\(dbgHasDevice), hasBaseUrl=\(dbgHasBase))")
+            return
+        }
 
+        shenmaLog.notice("[Shenma] handleConnectCallback: codes match, firing one-shot poll")
         do {
             let response = try await client.poll(baseUrl: baseUrl, deviceCode: deviceCode)
+            shenmaLog.notice("[Shenma] handleConnectCallback: poll returned status=\(response.status), hasToken=\(response.token != nil), hasUser=\(response.user != nil)")
             await applyPollResponse(response, baseUrl: baseUrl)
         } catch {
+            shenmaLog.notice("[Shenma] handleConnectCallback: poll error \(error)")
             // Swallow — the periodic poll loop is still running and will retry on
             // its own schedule. The deeplink is best-effort UX, not a hard path.
         }
@@ -491,10 +694,18 @@ final class ShenmaConnectionManager: ObservableObject {
     /// deeplink callback. Idempotent: calling it twice with the same approved
     /// response is a no-op (Keychain.save replaces the token; account stays the same).
     private func applyPollResponse(_ response: ShenmaAuthClient.DevicePollResponse, baseUrl: String) async {
+        shenmaLog.notice("[Shenma] applyPollResponse: status=\(response.status), hasToken=\(response.token != nil), hasUser=\(response.user != nil)")
         switch response.status {
         case "approved":
-            guard let token = response.token, let user = response.user else { return }
+            guard let token = response.token, let user = response.user else {
+                shenmaLog.notice("[Shenma] applyPollResponse: approved but token or user is nil!")
+                return
+            }
             ShenmaKeychain.saveToken(token)
+            // Verify the token actually persisted — if the Keychain rejected it
+            // we need to know immediately rather than showing "not connected" later.
+            let verified = ShenmaKeychain.loadToken() != nil
+            shenmaLog.notice("[Shenma] applyPollResponse: token saved, verified=\(verified), user=\(user.username)")
             let next = ShenmaAccount(user: user, connectedAt: Date())
             account = next
             saveAccount(next)
@@ -548,6 +759,8 @@ final class ShenmaConnectionManager: ObservableObject {
         account = nil
         userCode = nil
         creditBalance = nil
+        collections = []
+        collectionWorks = [:]
         isConnecting = false
         pendingDeviceCode = nil
         pendingBaseUrl = nil
@@ -569,6 +782,8 @@ final class ShenmaConnectionManager: ObservableObject {
         ShenmaKeychain.deleteToken()
         account = nil
         creditBalance = nil
+        collections = []
+        collectionWorks = [:]
         userCode = nil
         isConnecting = false
         pendingDeviceCode = nil
@@ -578,6 +793,7 @@ final class ShenmaConnectionManager: ObservableObject {
 
     private func startPolling(baseUrl: String, deviceCode: String, interval: Int, expiresIn: Int) {
         pollTask?.cancel()
+        shenmaLog.notice("[Shenma] startPolling: interval=\(interval)s, expiresIn=\(expiresIn)s, baseUrl=\(baseUrl)")
         pollTask = Task { [weak self] in
             let deadline = Date().addingTimeInterval(TimeInterval(max(30, expiresIn)))
             let sleepSeconds = max(2, interval)
@@ -590,6 +806,7 @@ final class ShenmaConnectionManager: ObservableObject {
                 guard let self else { return }
                 do {
                     let response = try await self.client.poll(baseUrl: baseUrl, deviceCode: deviceCode)
+                    shenmaLog.notice("[Shenma] poll: status=\(response.status), hasToken=\(response.token != nil), hasUser=\(response.user != nil)")
                     transientFailures = 0
                     if response.status == "approved" && (response.token == nil || response.user == nil) {
                         // Server signaled approved but the payload is missing required
@@ -605,6 +822,7 @@ final class ShenmaConnectionManager: ObservableObject {
                     // Pending — keep waiting.
                     continue
                 } catch let error as ShenmaConnectionError {
+                    shenmaLog.notice("[Shenma] poll error (ShenmaConnectionError): \(error)")
                     // 4xx (404/410/...) from the server is terminal; back-off + retry on
                     // network/decoding errors.
                     if case .http(let code, _) = error, (400..<500).contains(code) {
@@ -621,6 +839,7 @@ final class ShenmaConnectionManager: ObservableObject {
                         return
                     }
                 } catch {
+                    shenmaLog.notice("[Shenma] poll error (other): \(error)")
                     transientFailures += 1
                     if transientFailures >= maxTransientFailures {
                         self.lastError = error.localizedDescription
@@ -659,40 +878,114 @@ enum ShenmaKeychain {
     private static let service = "com.yoqu.ZenWallpaper.shenma"
     private static let account = "authToken"
 
+    /// Whether the data-protection keychain is available. Cached once at launch
+    /// to avoid probing on every save/load. Ad-hoc signed apps (no Keychain
+    /// Access Groups entitlement) get `-34018 errSecMissingEntitlement`.
+    private static let canUseDataProtection: Bool = {
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.yoqu.ZenWallpaper.probe",
+            kSecAttrAccount as String: "probe",
+            kSecValueData as String: Data("x".utf8),
+            kSecUseDataProtectionKeychain as String: true
+        ]
+        let status = SecItemAdd(probe as CFDictionary, nil)
+        if status == errSecSuccess || status == errSecDuplicateItem {
+            // Clean up probe entry.
+            let del: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: "com.yoqu.ZenWallpaper.probe",
+                kSecAttrAccount as String: "probe",
+                kSecUseDataProtectionKeychain as String: true
+            ]
+            SecItemDelete(del as CFDictionary)
+            return true
+        }
+        shenmaLog.notice("[Shenma] data-protection keychain unavailable (probe returned \(status)), using standard keychain")
+        return false
+    }()
+
     static func saveToken(_ token: String) {
         deleteToken()
         guard let data = token.data(using: .utf8) else { return }
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        if canUseDataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status != errSecSuccess {
+            shenmaLog.notice("[Shenma] saveToken failed: \(status)")
+        }
     }
 
     static func loadToken() -> String? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else {
-            return nil
+        if canUseDataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
         }
-        return String(data: data, encoding: .utf8)
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess,
+           let data = result as? Data,
+           let token = String(data: data, encoding: .utf8) {
+            return token
+        }
+        // If using data-protection, also check the standard keychain for
+        // tokens saved before the migration and migrate them forward.
+        if canUseDataProtection {
+            let legacyQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var legacyResult: AnyObject?
+            if SecItemCopyMatching(legacyQuery as CFDictionary, &legacyResult) == errSecSuccess,
+               let data = legacyResult as? Data,
+               let token = String(data: data, encoding: .utf8) {
+                saveToken(token)
+                // Delete the old entry.
+                let del: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecAttrAccount as String: account
+                ]
+                SecItemDelete(del as CFDictionary)
+                return token
+            }
+        }
+        return nil
     }
 
     static func deleteToken() {
-        let query: [String: Any] = [
+        // Delete from both keychains to be safe.
+        if canUseDataProtection {
+            let dpQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecUseDataProtectionKeychain as String: true
+            ]
+            SecItemDelete(dpQuery as CFDictionary)
+        }
+        let stdQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(stdQuery as CFDictionary)
     }
 }

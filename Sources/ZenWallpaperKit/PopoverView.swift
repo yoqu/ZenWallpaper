@@ -146,6 +146,8 @@ struct MainPopoverView: View {
                     if shenma.isConnected {
                         Divider()
                         CloudLibrarySection()
+                        Divider()
+                        CloudFavoritesSection()
                     }
 
                     Divider()
@@ -857,7 +859,149 @@ struct CloudLibrarySection: View {
     }
 }
 
-private struct CloudLibraryItem: View {
+struct CloudFavoritesSection: View {
+    @EnvironmentObject var shenma: ShenmaConnectionManager
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var l10n: LocalizationManager
+
+    @State private var selectedCollectionId: String?
+
+    private var currentWorks: [RemoteWork] {
+        guard let id = selectedCollectionId else { return [] }
+        return shenma.collectionWorks[id] ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Header
+            HStack {
+                Text(l10n.t("popover.cloudFavorites"))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if shenma.isLoadingCollections || shenma.isLoadingCollectionWorks {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        Task { await refreshAll() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help(l10n.t("popover.cloudFavoritesRefresh"))
+                }
+            }
+
+            // Collection tabs
+            if !shenma.collections.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(shenma.collections) { collection in
+                            CollectionTabButton(
+                                title: collection.isDefault
+                                    ? l10n.t("popover.collectionDefault")
+                                    : collection.title,
+                                count: collection.itemCount,
+                                isSelected: selectedCollectionId == collection.id
+                            ) {
+                                selectedCollectionId = collection.id
+                                Task { await refreshWorks(collectionId: collection.id) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Error
+            if let err = shenma.collectionsError, shenma.collections.isEmpty {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+
+            // Works grid
+            if shenma.collections.isEmpty && !shenma.isLoadingCollections {
+                Text(l10n.t("popover.cloudFavoritesEmpty"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            } else if currentWorks.isEmpty && !shenma.isLoadingCollectionWorks && selectedCollectionId != nil {
+                Text(l10n.t("popover.cloudFavoritesEmpty"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            } else if !currentWorks.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 6) {
+                        ForEach(currentWorks) { item in
+                            CloudLibraryItem(item: item)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(height: 80)
+            }
+        }
+        .task {
+            if shenma.collections.isEmpty {
+                await refreshAll()
+            }
+        }
+    }
+
+    private func refreshAll() async {
+        await shenma.fetchCollections(baseUrl: settings.shenmaBaseUrl)
+        // Auto-select first collection if none selected
+        if selectedCollectionId == nil || !shenma.collections.contains(where: { $0.id == selectedCollectionId }) {
+            selectedCollectionId = shenma.collections.first?.id
+        }
+        if let id = selectedCollectionId {
+            await refreshWorks(collectionId: id)
+        }
+    }
+
+    private func refreshWorks(collectionId: String) async {
+        // Skip if already cached
+        if shenma.collectionWorks[collectionId] != nil { return }
+        await shenma.fetchCollectionWorks(
+            baseUrl: settings.shenmaBaseUrl,
+            collectionId: collectionId,
+            aspectRatio: WallpaperScreenPolicy.currentAspectRatioSlug()
+        )
+    }
+}
+
+private struct CollectionTabButton: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("\(title) (\(count))")
+                .font(.caption)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+    }
+}
+
+struct CloudLibraryItem: View {
     @EnvironmentObject var manager: WallpaperManager
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var l10n: LocalizationManager
@@ -1114,12 +1258,101 @@ struct StylePickerView: View {
                     .help(a.name)
                 }
             }
-            TextField(l10n.t("popover.userPromptPlaceholder"),
-                      text: $userPrompt, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .font(.caption)
-            .lineLimit(2...3)
+            ScrollableTextEditor(
+                text: $userPrompt,
+                placeholder: l10n.t("popover.userPromptPlaceholder")
+            )
+            .frame(height: 60)
         }
+    }
+}
+
+// MARK: Scrollable text editor (AppKit-backed)
+//
+// NSTextView wrapped in NSScrollView so wheel scrolling stays inside the
+// input instead of bubbling up to the surrounding popover ScrollView.
+struct ScrollableTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = ScrollEatingScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+
+        let textView = NSTextView()
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.drawsBackground = false
+        textView.string = text
+        textView.textContainer?.widthTracksTextView = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+
+        context.coordinator.textView = textView
+        context.coordinator.applyPlaceholder()
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
+        context.coordinator.applyPlaceholder()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ScrollableTextEditor
+        weak var textView: NSTextView?
+
+        init(_ parent: ScrollableTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+            applyPlaceholder()
+        }
+
+        func applyPlaceholder() {
+            guard let tv = textView else { return }
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.placeholderTextColor,
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            ]
+            tv.setValue(NSAttributedString(string: parent.placeholder, attributes: attrs),
+                        forKey: "placeholderAttributedString")
+        }
+    }
+}
+
+// NSScrollView subclass that swallows scroll-wheel events whenever the
+// cursor is inside the input. When content can scroll, super scrolls it;
+// when it can't, we still avoid forwarding the event up the responder
+// chain so the surrounding SwiftUI ScrollView stays put.
+final class ScrollEatingScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
     }
 }
 

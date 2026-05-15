@@ -1,8 +1,11 @@
 import SwiftUI
 import AppKit
+import os.log
 // All app code lives in ZenWallpaperKit so the test runner can reach it through
 // `@testable import` — see Package.swift for context.
 @testable import ZenWallpaperKit
+
+private let appLog = Logger(subsystem: "com.zen.wallpaper", category: "App")
 
 /// Bridge AppKit's `application(_:open:)` into a SwiftUI-friendly notification.
 /// Why not `.onOpenURL`? In a `MenuBarExtra`-only app the SwiftUI scene tree only
@@ -13,6 +16,7 @@ import AppKit
 /// case `ShenmaConnectionManager`) can react.
 final class ZenWallpaperAppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
+        appLog.notice("[Shenma] AppDelegate: received \(urls.count) URL(s): \(urls)")
         for url in urls {
             NotificationCenter.default.post(
                 name: ShenmaConnectionManager.urlReceivedNotificationName,
@@ -36,8 +40,8 @@ struct ZenWallpaperApp: App {
     @MainActor
     init() {
         let settings = AppSettings()
-        // Bump anyone still on the old `https://qushenma.com` default to the canonical
-        // `https://www.qushenma.com`. No-op for users who set their own URL.
+        // Bump anyone still on old uyoqu.com defaults to the canonical
+        // `https://www.uyoqu.com`. No-op for users who set their own URL.
         settings.migrateLegacyShenmaBaseUrlIfNeeded()
         // Drop dead "NSWindow Frame ...ZenWallpaper.PopoverRoot..." entries
         // left over from when PopoverRoot lived in the executable target.

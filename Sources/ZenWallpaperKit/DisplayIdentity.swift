@@ -101,7 +101,7 @@ struct DisplayIdentity: Identifiable, Hashable, Sendable {
         return result
     }
 
-    private static func closestRatioSlug(for ratio: Double) -> String {
+    static func closestRatioSlug(for ratio: Double) -> String {
         struct Candidate { let slug: String; let value: Double }
         let candidates: [Candidate] = [
             Candidate(slug: "16:9", value: 16.0 / 9.0),

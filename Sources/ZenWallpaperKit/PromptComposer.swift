@@ -33,12 +33,30 @@ struct PromptComposer {
 
     private static func translateStyle(_ s: String) -> String {
         switch s {
-        case "极简": return "minimalist, clean lines, soft gradients"
-        case "水彩": return "watercolor painting, gentle washes"
-        case "摄影": return "ultra realistic photography, shallow depth of field"
-        case "赛博朋克": return "cyberpunk, neon-lit cityscape, vibrant"
-        case "胶片": return "analog film photography, grain, warm tones"
-        case "油画": return "oil painting, textured brush strokes"
+        case "极简":
+            return "minimalist desktop wallpaper, clean lines, soft gradients, simple geometry, abundant negative space"
+        case "自然景观":
+            return "serene nature landscape, mountains, forest, lake, morning mist, golden-hour cinematic light, calm negative space"
+        case "抽象渐变":
+            return "abstract flowing gradients, soft organic shapes, glassy light, calm color fields, icon-friendly negative space"
+        case "水彩":
+            return "watercolor painting, gentle washes, airy texture, delicate natural scene, soft calm composition"
+        case "摄影":
+            return "ultra realistic photography, natural light, shallow depth of field, polished desktop wallpaper composition"
+        case "日系动画":
+            return "anime-inspired scenic background, luminous sky, quiet town or countryside, painterly clouds, no characters, no IP references"
+        case "科幻空间":
+            return "sci-fi deep space wallpaper, nebula, distant planets, star field, cinematic cosmic scale, quiet dark atmosphere"
+        case "赛博朋克":
+            return "cyberpunk wallpaper, neon-lit futuristic city, rainy reflections, moody skyline, controlled contrast"
+        case "梦幻奇幻":
+            return "fantasy landscape, ethereal magical forest, ancient ruins, distant floating islands, soft epic light, peaceful dreamlike mood"
+        case "像素艺术":
+            return "high-resolution pixel art landscape, cozy scene, crisp pixels, limited palette, mature desktop wallpaper composition"
+        case "胶片":
+            return "analog film photography, warm grain, nostalgic color grading, soft contrast, quiet cinematic mood"
+        case "油画":
+            return "oil painting, textured brush strokes, painterly landscape, rich but calm color harmony"
         default: return s
         }
     }

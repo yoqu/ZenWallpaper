@@ -24,10 +24,10 @@ func runAll() async -> Int {
     }
 
     print("\nShenmaEndpoint")
-    _ = TestReporter.run("canonical https://www.qushenma.com matches production preset") {
+    _ = TestReporter.run("canonical https://www.uyoqu.com matches production preset") {
         ShenmaEndpointTests.canonicalProductionUrlMatchesProduction()
     }
-    _ = TestReporter.run("legacy https://qushenma.com (no www) still matches production") {
+    _ = TestReporter.run("legacy uyoqu.com URLs still match production") {
         ShenmaEndpointTests.legacyApexUrlMatchesProduction()
     }
     _ = TestReporter.run("trailing slash is ignored when matching presets") {
@@ -42,8 +42,8 @@ func runAll() async -> Int {
     _ = TestReporter.run("unknown URLs fall back to custom") {
         ShenmaEndpointTests.unknownUrlsFallBackToCustom()
     }
-    _ = TestReporter.run("legacy default URL is migrated to the www host") {
-        ShenmaEndpointTests.legacyDefaultUrlGetsMigratedToWwwHost()
+    _ = TestReporter.run("legacy default URL is migrated to the new host") {
+        ShenmaEndpointTests.legacyDefaultUrlGetsMigratedToNewHost()
     }
     _ = TestReporter.run("user-customized URL survives migration") {
         ShenmaEndpointTests.customUrlSurvivesMigration()
@@ -58,6 +58,12 @@ func runAll() async -> Int {
     }
     _ = TestReporter.run("prompt composer includes selected fields") {
         WallpaperCatalogTests.promptComposerIncludesSelectedFields()
+    }
+    _ = TestReporter.run("style catalog includes expanded wallpaper styles") {
+        WallpaperCatalogTests.styleCatalogIncludesExpandedWallpaperStyles()
+    }
+    _ = TestReporter.run("prompt composer translates expanded styles") {
+        WallpaperCatalogTests.promptComposerTranslatesExpandedStyles()
     }
 
     print("\nShenmaConnectionManager.handleConnectCallback")

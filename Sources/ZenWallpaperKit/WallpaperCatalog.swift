@@ -39,9 +39,15 @@ let MOODS: [MoodOption] = [
 
 let STYLE_PRESETS: [StylePreset] = [
     StylePreset(id: "极简", assetName: "style-minimal"),
+    StylePreset(id: "自然景观", assetName: "style-nature"),
+    StylePreset(id: "抽象渐变", assetName: "style-abstract-gradient"),
     StylePreset(id: "水彩", assetName: "style-watercolor"),
     StylePreset(id: "摄影", assetName: "style-photo"),
+    StylePreset(id: "日系动画", assetName: "style-anime-scenery"),
+    StylePreset(id: "科幻空间", assetName: "style-sci-fi-space"),
     StylePreset(id: "赛博朋克", assetName: "style-cyberpunk"),
+    StylePreset(id: "梦幻奇幻", assetName: "style-fantasy"),
+    StylePreset(id: "像素艺术", assetName: "style-pixel-art"),
     StylePreset(id: "胶片", assetName: "style-film"),
     StylePreset(id: "油画", assetName: "style-oil"),
 ]

@@ -5,22 +5,23 @@ import Foundation
 enum ShenmaEndpointTests {
 
     static func canonicalProductionUrlMatchesProduction() {
-        expectEqual(ShenmaEndpoint.match("https://www.qushenma.com"), .production)
+        expectEqual(ShenmaEndpoint.match("https://www.uyoqu.com"), .production)
     }
 
     static func legacyApexUrlMatchesProduction() {
-        // Old default shipped without the `www.` prefix — still treated as production
+        // Old defaults shipped with uyoqu.com — still treated as production
         // so users who never customized their URL aren't bumped to "Custom".
-        expectEqual(ShenmaEndpoint.match("https://qushenma.com"), .production)
+        expectEqual(ShenmaEndpoint.match("https://uyoqu.com"), .production)
+        expectEqual(ShenmaEndpoint.match("https://www.uyoqu.com"), .production)
     }
 
     static func trailingSlashIsIgnored() {
-        expectEqual(ShenmaEndpoint.match("https://www.qushenma.com/"), .production)
+        expectEqual(ShenmaEndpoint.match("https://www.uyoqu.com/"), .production)
         expectEqual(ShenmaEndpoint.match("http://127.0.0.1:5173/"), .localhost)
     }
 
     static func leadingAndTrailingWhitespaceIsIgnored() {
-        expectEqual(ShenmaEndpoint.match("  https://www.qushenma.com  "), .production)
+        expectEqual(ShenmaEndpoint.match("  https://www.uyoqu.com  "), .production)
     }
 
     static func bothLocalhostHostsMatchLocalhostPreset() {
@@ -29,23 +30,27 @@ enum ShenmaEndpointTests {
     }
 
     static func unknownUrlsFallBackToCustom() {
-        expectEqual(ShenmaEndpoint.match("https://staging.qushenma.com"), .custom)
+        expectEqual(ShenmaEndpoint.match("https://staging.uyoqu.com"), .custom)
         expectEqual(ShenmaEndpoint.match("http://192.168.1.10:5173"), .custom)
         expectEqual(ShenmaEndpoint.match(""), .custom)
     }
 
-    static func legacyDefaultUrlGetsMigratedToWwwHost() {
+    static func legacyDefaultUrlGetsMigratedToNewHost() {
         let settings = AppSettings()
-        settings.shenmaBaseUrl = "https://qushenma.com"
+        settings.shenmaBaseUrl = "https://uyoqu.com"
         settings.migrateLegacyShenmaBaseUrlIfNeeded()
-        expectEqual(settings.shenmaBaseUrl, "https://www.qushenma.com")
+        expectEqual(settings.shenmaBaseUrl, "https://www.uyoqu.com")
+
+        settings.shenmaBaseUrl = "https://www.uyoqu.com"
+        settings.migrateLegacyShenmaBaseUrlIfNeeded()
+        expectEqual(settings.shenmaBaseUrl, "https://www.uyoqu.com")
     }
 
     static func customUrlSurvivesMigration() {
         let settings = AppSettings()
-        settings.shenmaBaseUrl = "https://staging.qushenma.com"
+        settings.shenmaBaseUrl = "https://staging.uyoqu.com"
         settings.migrateLegacyShenmaBaseUrlIfNeeded()
-        expectEqual(settings.shenmaBaseUrl, "https://staging.qushenma.com",
+        expectEqual(settings.shenmaBaseUrl, "https://staging.uyoqu.com",
                     "migration should only touch the legacy default, not user-set URLs")
     }
 }

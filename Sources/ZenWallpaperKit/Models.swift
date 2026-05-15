@@ -30,6 +30,15 @@ struct RemoteWork: Identifiable, Hashable {
     let tagNames: [String]
 }
 
+/// A user's collection (folder) on qushenma. Used to populate the
+/// tab picker in the cloud-favorites section.
+struct RemoteCollection: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let itemCount: Int
+    let isDefault: Bool
+}
+
 /// One row of the qushenma credit ledger. Mirrors the shape returned by
 /// `GET /api/credits/transactions/me` — we only surface the four fields the
 /// history page actually displays.
