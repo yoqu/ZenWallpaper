@@ -2,64 +2,59 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleExecutable</key>
-    <string>ZenWallpaper</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.zen.wallpaper</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>ZenWallpaper</string>
-    <key>CFBundleDisplayName</key>
-    <string>ZenWallpaper</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>2</string>
-    <key>CFBundleLocalizations</key>
-    <array>
-        <string>en</string>
-        <string>zh-Hans</string>
-        <string>zh-Hant</string>
-    </array>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>LSHasLocalizedDisplayName</key>
-    <true/>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-    </dict>
-    <!-- Custom URL scheme registration. The qushenma frontend redirects the
-         browser to `zenwallpaper://connected?code=BNUH-X9E2` after the user
-         approves a desktop connection, and macOS routes that URL into our
-         `onOpenURL` handler so we can short-circuit the device-flow polling
-         loop and pick up the issued token immediately. -->
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>com.zen.wallpaper.connect</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>zenwallpaper</string>
-            </array>
-        </dict>
-    </array>
-    <key>NSHumanReadableCopyright</key>
-    <string>© 2026 ZenWallpaper</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>ZenWallpaper</string>
+	<key>CFBundleExecutable</key>
+	<string>ZenWallpaper</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.zen.wallpaper</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+		<string>zh-Hant</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>ZenWallpaper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.zen.wallpaper.connect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>zenwallpaper</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1.2.0</string>
+	<key>LSHasLocalizedDisplayName</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 ZenWallpaper</string>
 </dict>
 </plist>
